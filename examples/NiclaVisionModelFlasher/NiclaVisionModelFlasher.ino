@@ -179,7 +179,7 @@ void setup() {
   Serial.println(kSketchName);
   Serial.println("[model_flasher] board=Nicla Vision + BB15");
   Serial.println("[model_flasher] bus=Wire SDA=D11 SCL=D12");
-  Serial.println("[model_flasher] wiring=akida_cs=D7 bridge_cs=D1 reset=D3 expander=0x43");
+  Serial.println("[model_flasher] wiring=proceed=D2/PA_10 HIGH akida_cs=D7 bridge_cs=D1 akida_reset_n=D3 expander=0x43");
   Serial.println("[model_flasher] model=human classifier bundled in this example");
   print_spi_configuration(options);
 

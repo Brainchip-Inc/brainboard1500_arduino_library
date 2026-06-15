@@ -15,13 +15,38 @@ used by the bundled examples. The public flow is intentionally small:
 
 Example wiring assumed by the shipped sketches:
 
+- `BB15 proceed / board-level enable`: `D2` (same Nicla Vision pin; required and driven high during bring-up)
 - `AKD` chip select: `D7`
 - bridge / flash chip select: `D1`
-- AKD reset: `D3`
+- `AKD1500 RESET_N`: `D3` (required; software drives this line during bring-up)
 - SPI `COPI`: `D8`
 - SPI `CIPO`: `D10`
 - SPI `SCK`: `D9`
 - BB15 expander: `I2C 0x43` on `Wire` (`SDA=D11`, `SCL=D12`)
+
+## Wiring Notes
+
+The shipped examples actively drive two different classes of control lines
+during board bring-up:
+
+- board-level proceed / enable line: `D2 / PA_10`, driven high
+- device-level AKD reset line: `D3`, driven as `AKD1500 RESET_N`
+
+The software sequence used by both examples is:
+
+1. drive `D2 / PA_10` high so the BB15 board is in the expected proceed /
+   enabled state
+2. configure the BB15 expander on `0x43`
+3. assert `AKD1500 RESET_N` low on `D3`
+4. strap the AKD1500 boot mode through the expander (`P0` low for the
+   external-flash execution path)
+5. release `AKD1500 RESET_N` high on `D3`
+6. link to the AKD1500 and continue with flash/model operations
+
+That means the `D2 / PA_10` board-level control connection and the
+`D3 -> AKD1500 RESET_N` connection are both required for the bundled software
+flow. If either is missing from your wiring, the examples may compile and
+upload but board bring-up will fail.
 
 ## Install
 
@@ -68,6 +93,12 @@ File -> Examples -> AKD1500 -> NiclaVisionModelFlasher
 ```
 
 Build and upload it to the connected Nicla Vision.
+
+This first sketch depends on the `D2 / PA_10` board-level proceed / enable line and
+the `D3 -> AKD1500 RESET_N` connection described above. The flasher first
+drives the board-level control lines high, then asserts AKD reset, straps the
+boot mode through the expander, and finally releases reset before attempting
+flash access and model load.
 
 Expected serial output includes:
 
@@ -170,6 +201,11 @@ model.externalLocation = AkidaNicla::externalModelAddressFromOffset(offset);
 
 ## Troubleshooting
 
+- If your wiring was copied from an older connection list or diagram, verify
+  that `D2 / PA_10` is connected to the BB15 board-level proceed / enable
+  input and that `D3` is connected to `AKD1500 RESET_N`. The shipped examples
+  drive `D2 / PA_10` high first, then assert and release `RESET_N` so the
+  AKD1500 can be strapped into external-flash mode before linking.
 - If Arduino IDE opens the example but compiles against a different `AKD1500`
   library copy, remove stale duplicates from your sketchbook `libraries/`
   directory and restart the IDE.

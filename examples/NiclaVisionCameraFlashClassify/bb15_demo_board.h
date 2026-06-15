@@ -176,7 +176,7 @@ class Bb15NiclaVisionBoard {
   void printSummary(Print& out) const {
     out.println("[camera_flash_demo] board=Nicla Vision + BB15");
     out.println("[camera_flash_demo] bus=Wire SDA=D11 SCL=D12");
-    out.println("[camera_flash_demo] wiring=akida_cs=D7 bridge_cs=D1 reset=D3 expander=0x43");
+    out.println("[camera_flash_demo] wiring=proceed=D2/PA_10 HIGH akida_cs=D7 bridge_cs=D1 akida_reset_n=D3 expander=0x43");
   }
 
  private:
