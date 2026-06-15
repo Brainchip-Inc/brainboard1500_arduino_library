@@ -29,12 +29,12 @@ Example wiring assumed by the shipped sketches:
 The shipped examples actively drive two different classes of control lines
 during board bring-up:
 
-- board-level proceed / enable line: `D2 / PA_10`, driven high
+- board-level proceed / enable line: `D2`, driven high
 - device-level AKD reset line: `D3`, driven as `AKD1500 RESET_N`
 
 The software sequence used by both examples is:
 
-1. drive `D2 / PA_10` high so the BB15 board is in the expected proceed /
+1. drive `D2` high so the BB15 board is in the expected proceed /
    enabled state
 2. configure the BB15 expander on `0x43`
 3. assert `AKD1500 RESET_N` low on `D3`
