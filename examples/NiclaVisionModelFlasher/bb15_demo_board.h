@@ -33,7 +33,8 @@ class PioExpander6408 {
     return writeRegister(kRegOutputState, 0x00u) &&
            writeRegister(kRegDirection, 0xFFu) &&
            writeRegister(kRegOutputHighZ, 0x00u) &&
-           writeRegister(kRegOutputState, 0x02u);
+           writeRegister(kRegOutputState, 0x02u) &&
+           writeRegister(0x11u, 0xFFu);
   }
 
   bool pinMode(uint8_t pin, PinMode mode) {
