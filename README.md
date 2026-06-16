@@ -81,6 +81,21 @@ Point it at the downloaded repository ZIP.
   Flagship demo. Captures frames from the Nicla Vision camera, preprocesses
   them for the bundled human-classifier model, runs repeated classification
   from external flash, and optionally serves frames to the preview tool.
+- `NiclaVisionInaTimerMonitor`
+  Power-measurement example. Samples the BB15 INA monitor on a timer schedule
+  while the board transitions from model-loaded idle into continuous inference.
+  The sketch emits compact CSV intended for offline analysis.
+
+## Included Tools
+
+- `tools/nicla_vision_preview.py`
+  Preview client for `NiclaVisionCameraFlashClassify`.
+- `tools/log_ina_csv.sh`
+  Host-side logger for `NiclaVisionInaTimerMonitor`.
+- `tools/plot_ina_csv.py`
+  PDF report generator for captured INA CSV logs.
+- `tools/README.md`
+  Usage notes for the INA logger and plotter workflow.
 
 ## Quick Start
 
