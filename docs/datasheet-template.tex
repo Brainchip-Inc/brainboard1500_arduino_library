@@ -1,0 +1,361 @@
+\documentclass[11pt,a4paper]{article}
+
+% Core font setup for a clean sans-serif document similar to the reference PDF.
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+
+% Page size and margins. Adjust these if you want a tighter or looser layout.
+\usepackage[a4paper,margin=22mm,headheight=32pt,headsep=18pt,footskip=18mm]{geometry}
+
+% Table/layout helpers used by the template.
+\usepackage{array}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{textcomp}
+
+% Global paragraph and list styling.
+\renewcommand{\familydefault}{\sfdefault}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.65em}
+\setlength{\leftmargini}{1.5em}
+\setlength{\leftmarginii}{1.2em}
+\setlength{\itemsep}{0.35em}
+
+% ---------------------------------------------------------------------------
+% Document metadata
+% Edit these values first when reusing the template.
+% ---------------------------------------------------------------------------
+
+% Brand or family label shown in the top-left header.
+\newcommand{\brandname}{Neuromorpyx BrainBoard}
+
+% Main product name shown on the cover and in the header.
+\newcommand{\productname}{BrainBoard 15}
+
+% Document type shown next to the product name.
+\newcommand{\documenttype}{Datasheet}
+
+% Secondary cover text under the title.
+\newcommand{\documentsubtitle}{User Manual}
+
+% Product code or SKU shown on the cover.
+\newcommand{\sku}{SKU: BB15-0001}
+
+% Footer date shown as the document modification date.
+\newcommand{\documentmodified}{17/06/2026}
+
+% Footer center text.
+\newcommand{\documenttitlefull}{\productname\ \documenttype}
+
+% Optional cover image path. Put the image next to this .tex file or change the path.
+\newcommand{\coverimagepath}{./NMX-BB-15_F.jpg}
+
+% Short market/application summary shown on the cover page.
+\newcommand{\targetareas}{Embedded AI, prototyping, edge vision}
+
+% ---------------------------------------------------------------------------
+% Heading style
+% This customizes section/subsection appearance without extra packages.
+% ---------------------------------------------------------------------------
+
+\makeatletter
+\renewcommand\section{\@startsection{section}{1}{\z@}%
+  {-3.5ex \@plus -1ex \@minus -.2ex}%
+  {2.3ex \@plus.2ex}%
+  {\normalfont\Large\bfseries\ttfamily}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+  {-3.0ex \@plus -1ex \@minus -.2ex}%
+  {1.4ex \@plus .2ex}%
+  {\normalfont\large\bfseries}}
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{\z@}%
+  {-2.5ex \@plus -1ex \@minus -.2ex}%
+  {1.0ex \@plus .2ex}%
+  {\normalfont\normalsize\bfseries}}
+\makeatother
+
+% Rename the table of contents heading.
+\renewcommand{\contentsname}{\ttfamily\bfseries CONTENTS}
+
+% Simple boxed note macro.
+% Usage:
+%   \notebox{Title}{Body text goes here.}
+\newcommand{\notebox}[2]{
+  \begin{center}
+  \setlength{\fboxsep}{8pt}
+  \fbox{\parbox{0.94\linewidth}{\textbf{#1}\par\smallskip #2}}
+  \end{center}
+}
+
+% ---------------------------------------------------------------------------
+% Header/footer layout used on all pages.
+% ---------------------------------------------------------------------------
+\newcommand{\setbrandpagestyle}{
+  \pagestyle{fancy}
+  \fancyhf{}
+  \fancyhead[L]{\ttfamily\bfseries\large \brandname}
+  \fancyhead[R]{\ttfamily\bfseries\large \productname\\[-1pt]\documenttype}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \fancyfoot[L]{\bfseries \thepage\ /\ \pageref{LastPage}}
+  \fancyfoot[C]{\documenttitlefull}
+  \fancyfoot[R]{Modified: \documentmodified}
+}
+
+% Cover image block.
+% If the image file exists, it is shown.
+% If it does not exist, a placeholder box is shown instead.
+\newcommand{\coverimageblock}{
+  \IfFileExists{\coverimagepath}{
+    \includegraphics[width=0.31\textwidth]{\coverimagepath}
+  }{
+    \fbox{
+      \begin{minipage}[c][45mm][c]{0.27\textwidth}
+        \centering
+        \ttfamily Optional cover image
+      \end{minipage}
+    }
+  }
+}
+
+% ---------------------------------------------------------------------------
+% Cover page
+% Replace the placeholder description and target areas below.
+% ---------------------------------------------------------------------------
+\newcommand{\makedatasheetcover}{
+  \thispagestyle{fancy}
+  \vspace*{0.6cm}
+  \begin{flushright}
+    {\ttfamily\bfseries\LARGE \productname\\[2pt]\documenttype\par}
+    \vspace{1.8cm}
+    {\Large \documentsubtitle\par}
+    \vspace{0.4cm}
+    {\Large \sku\par}
+  \end{flushright}
+
+  \vspace{2.1cm}
+  \begin{flushright}
+    \coverimageblock
+  \end{flushright}
+
+  \vfill
+  % Cover section: short product description.
+  {\ttfamily\bfseries\Huge Description\par}
+  \vspace{0.7cm}
+  % Write 1 short paragraph here describing the board/product.
+  Nicla style embeded module integrating the Brainchip AKD1500 Neuromorphic AI accelerator
+  
+  \vspace{1.0cm}
+  % Cover section: target markets / use cases.
+  {\ttfamily\bfseries\Huge Target Areas:\par}
+  \vspace{0.55cm}
+  % Write a short comma-separated list here.
+  \targetareas
+
+  \vspace{0.8cm}
+  \rule{\textwidth}{0.5pt}
+  \newpage
+}
+
+% Table of contents page.
+\newcommand{\makedatasheettoc}{
+  \thispagestyle{fancy}
+  \tableofcontents
+  \newpage
+}
+
+% Activate the shared header/footer style.
+\setbrandpagestyle
+
+\begin{document}
+
+% Generate page 1 cover.
+\makedatasheetcover
+
+% Generate page 2 contents.
+\makedatasheettoc
+
+% ---------------------------------------------------------------------------
+% Main body starts here.
+% Replace each placeholder paragraph/table/list with your real content.
+% ---------------------------------------------------------------------------
+
+\section{Application Examples}
+% Write a short introduction for the product use cases here.
+Summarize the main use cases here. The reference document uses short introductory paragraphs
+followed by compact bullet lists.
+
+\begin{itemize}
+  % Replace each bullet with a real application area.
+  \item \textbf{Industrial automation:} Describe the primary industrial workflow or deployment.
+  \item \textbf{Prototyping:} Explain how the board accelerates proof-of-concept work.
+  \item \textbf{Edge AI:} Note the inference or sensing role in the wider system.
+\end{itemize}
+
+\section{Features}
+
+\subsection{General Specifications Overview}
+% Start with a short paragraph summarizing the product at a high level.
+This section is usually a short paragraph plus a two-column summary table.
+
+% Main spec summary table.
+% Left column = spec label.
+% Right column = value / explanation.
+\begin{tabular}{|>{\bfseries}p{0.29\textwidth}|p{0.63\textwidth}|}
+\hline
+Feature & Description \\
+\hline
+Processor & Insert the MCU, accelerator, or SoC details here. \\
+Memory & Flash, RAM, external storage, and relevant limits. \\
+Connectivity & SPI, I2C, UART, USB, wireless, or other interfaces. \\
+Power Supply & Supported voltage range and main power-input path. \\
+Sensors & List onboard sensors and the purpose of each one. \\
+Dimensions & Physical size in millimeters. \\
+Weight & Board weight in grams. \\
+\hline
+\end{tabular}
+
+\subsection{Accessories}
+% Replace these with included or optional accessories.
+\begin{itemize}
+  \item Accessory or cable included with the product.
+  \item Optional connector, header, or mechanical add-on.
+\end{itemize}
+
+\subsection{Related Products}
+% Replace these with companion boards, modules, or kits.
+\begin{itemize}
+  \item Related base board or carrier.
+  \item Related accessory or expansion module.
+  \item Related development kit.
+\end{itemize}
+
+\section{Ratings}
+
+\subsection{Recommended Operating Conditions}
+% Use this table for electrical, thermal, or timing ranges.
+Use a compact operating-range table for voltages, temperatures, and any required timing limits.
+
+\begin{tabular}{|p{0.31\textwidth}|p{0.12\textwidth}|p{0.09\textwidth}|p{0.09\textwidth}|p{0.09\textwidth}|p{0.12\textwidth}|}
+\hline
+Parameter & Symbol & Min & Typ & Max & Unit \\
+\hline
+Input Voltage & $V_{IN}$ & 3.3 & 5.0 & 5.5 & V \\
+Operating Temperature & $T_{OP}$ & -20 & 25 & 70 & \textdegree C \\
+Current Draw & $I_{SYS}$ & -- & 120 & 250 & mA \\
+\hline
+\end{tabular}
+
+% Use note boxes for practical warnings, power tips, or integration caveats.
+\notebox{Power Tip}{Use short note boxes for practical guidance. The reference PDF uses these to
+call out power and safety details without interrupting the flow of the section.}
+
+\notebox{Safety Note}{Document any voltage-level caveats, thermal constraints, or handling
+requirements here.}
+
+\section{Functional Overview}
+
+\subsection{Pinout}
+% Put a pinout description here.
+% If you have a pinout image, insert it with \includegraphics.
+Place the pin summary here. If you have a diagram, insert it with \verb|\includegraphics|.
+
+\subsection{Block Diagram}
+% Put a system-level block diagram description or image here.
+Add the architecture diagram or subsystem overview here.
+
+\subsection{Power Supply}
+% Explain rails, regulators, battery inputs, and power modes here.
+Explain power domains, regulators, and any always-on versus switchable rails.
+
+\section{Device Operation}
+
+\subsection{Getting Started}
+% Describe first-boot or first-use steps here.
+Link the quick-start path here: setup, flashing, examples, and first validation steps.
+
+\subsection{Libraries and Firmware}
+% List required libraries, firmware, repos, and versions here.
+List the core software package, repository URL, and any version constraints.
+
+\subsection{Online Resources}
+% Replace with actual docs, repos, tutorials, or product pages.
+\begin{itemize}
+  \item Documentation portal
+  \item Library reference
+  \item Example repository
+\end{itemize}
+
+\section{Mechanical Information}
+
+\subsection{Board Dimensions}
+% Put mechanical dimensions or an engineering drawing here.
+Add the mechanical drawing or a dimensions table here.
+
+\subsection{Connectors}
+% Describe connector names, pitch, mating parts, and orientation here.
+Describe connector types, mating parts, and mounting guidance.
+
+\subsection{Peripherals and Actuators}
+% Describe LEDs, buttons, microphones, sensors, and other onboard hardware here.
+Summarize LEDs, buttons, microphones, cameras, or other user-facing hardware.
+
+\section{Product Compliance}
+
+\subsection{Compliance Summary}
+% Keep this as a short summary table of regulatory compliance.
+\begin{center}
+\begin{tabular}{ll}
+CE & European Union \\
+RoHS & Restriction of Hazardous Substances \\
+REACH & Registration, Evaluation, Authorization and Restriction of Chemicals \\
+\end{tabular}
+\end{center}
+
+\subsection{Regional Statements}
+% Put formal compliance declarations here.
+Reserve this space for declarations, classifications, and labelling notes.
+
+\section{Company Information}
+
+% Company/contact table.
+\begin{tabular}{|>{\bfseries}p{0.28\textwidth}|p{0.64\textwidth}|}
+\hline
+Company Information & Details \\
+\hline
+Company Name & BrainBoard Technologies \\
+Company Address & Replace with your legal or support address. \\
+\hline
+\end{tabular}
+
+\section{Reference Documentation}
+
+% Reference list table.
+% Replace the example URLs with real links, document names, and repositories.
+\begin{longtable}{|p{0.08\textwidth}|p{0.34\textwidth}|p{0.48\textwidth}|}
+\hline
+No. & Reference & Link \\
+\hline
+\endhead
+1 & Main documentation & \texttt{https://example.com/docs} \\
+2 & Library repository & \texttt{https://example.com/library} \\
+3 & Example projects & \texttt{https://example.com/examples} \\
+\hline
+\end{longtable}
+
+\section{Document Revision History}
+
+% Revision history table.
+% Add one row per release or update.
+\begin{tabular}{|p{0.18\textwidth}|p{0.14\textwidth}|p{0.58\textwidth}|}
+\hline
+Date & Revision & Changes \\
+\hline
+17/06/2026 & 1 & Initial template release. \\
+\hline
+\end{tabular}
+
+% Label used by the footer page count.
+\label{LastPage}
+
+\end{document}
