@@ -24,6 +24,26 @@
 namespace akida {
 namespace dma {
 
+namespace {
+
+const char* g_runtime_fault_message = nullptr;
+
+void set_runtime_fault(const char* message) {
+  if (g_runtime_fault_message == nullptr) {
+    g_runtime_fault_message = message;
+  }
+}
+
+}  // namespace
+
+void clear_runtime_fault() { g_runtime_fault_message = nullptr; }
+
+bool has_runtime_fault() { return g_runtime_fault_message != nullptr; }
+
+const char* runtime_fault_message() {
+  return g_runtime_fault_message != nullptr ? g_runtime_fault_message : "ok";
+}
+
 #ifndef AKIDA_NICLA_DMA_ENQUEUE_TRACE
 #define AKIDA_NICLA_DMA_ENQUEUE_TRACE 0
 #endif
@@ -509,12 +529,15 @@ dma::addr enqueue_descriptor(HardwareDriver* driver, const Engine& dma,
   return last_descriptor_addr;
 }
 
-void process(HardwareDriver* driver, const Config& dma,
+bool process(HardwareDriver* driver, const Config& dma,
              const dma::Descriptor& descriptor) {
+  if (has_runtime_fault()) {
+    return false;
+  }
   // enqueue descriptor
   enqueue_descriptor(driver, dma.engine, descriptor);
   // then wait for completion
-  wait_config_dma_descriptor_complete(driver, dma);
+  return wait_config_dma_descriptor_complete(driver, dma);
 }
 
 uint16_t get_last_job_id_processed(HardwareDriver* driver, const Inputs& dma) {
@@ -607,7 +630,10 @@ void init_default_dma(HardwareDriver* driver, const Engine& dma,
   toggle_engine(driver, dma.reg_base_addr, false);
 }
 
-void enable_config_dma_multipass(HardwareDriver* driver, const Config& dma) {
+bool enable_config_dma_multipass(HardwareDriver* driver, const Config& dma) {
+  if (has_runtime_fault()) {
+    return false;
+  }
   // Set last valid to a value > max descriptors, e.g +1 to loop forever. Note
   // that the value cannot exceed 0xff (maximum value for descriptors id).
   constexpr uint32_t cur_desc_default_val = 0xff;
@@ -626,12 +652,18 @@ void enable_config_dma_multipass(HardwareDriver* driver, const Config& dma) {
   // to complete
   if (!wait_for_interrupt_ext(driver, dma.engine,
                               DMA_BUFFER_END_INTS_DESC_BURST_DONE)) {
-    panic("Timed out while dma was configuring NPs for multipass");
+    set_runtime_fault("dma_config_multipass_timeout");
+    toggle_engine(driver, dma.engine.reg_base_addr, false);
+    return false;
   }
+  return true;
 }
 
-void wait_config_dma_descriptor_complete(HardwareDriver* driver,
+bool wait_config_dma_descriptor_complete(HardwareDriver* driver,
                                          const Config& dma) {
+  if (has_runtime_fault()) {
+    return false;
+  }
   // turn dma on
   toggle_engine(driver, dma.engine.reg_base_addr, true);
   if (dma.engine.reg_base_addr == kConfigDmaBase) {
@@ -639,10 +671,13 @@ void wait_config_dma_descriptor_complete(HardwareDriver* driver,
   }
   // then wait for interrupt
   if (!wait_for_interrupt_ext(driver, dma.engine, DMA_BUFFER_END_INTS_OB)) {
-    panic("Timed out while processing dma configuration request");
+    set_runtime_fault("dma_config_timeout");
+    toggle_engine(driver, dma.engine.reg_base_addr, false);
+    return false;
   }
   // turn dma off
   toggle_engine(driver, dma.engine.reg_base_addr, false);
+  return true;
 }
 
 void enqueue_extra_descriptor(HardwareDriver* driver, const Config& dma,

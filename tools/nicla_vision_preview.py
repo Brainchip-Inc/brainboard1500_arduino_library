@@ -12,6 +12,8 @@ Usage:
 Protocol:
 - send byte 2 to request image mode + resolution
 - send byte 1 to request one frame
+- send byte 3 to start continuous streaming
+- send byte 4 to stop continuous streaming
 - frame payload is wrapped as:
     START = FA CE FE ED
     STOP  = DA BB AD 00
@@ -33,6 +35,8 @@ STOP_SEQUENCE = b"\xDA\xBB\xAD\x00"
 INFERENCE_RESULT_SEQUENCE = b"\xAC\x1D\x1A\xDA"
 REQUEST_FRAME = b"\x01"
 REQUEST_CONFIG = b"\x02"
+REQUEST_STREAM_START = b"\x03"
+REQUEST_STREAM_STOP = b"\x04"
 CONFIG_RETRIES = 8
 RECONNECT_DELAY_S = 1.0
 OPEN_SETTLE_DELAY_S = 1.0
@@ -87,7 +91,7 @@ class InferenceResult:
     score1: int
     prep_ms: int | None
     inference_ms: int
-    transfer_ms: int | None
+    grab_ms: int | None
 
 
 def label_for_prediction(predicted_index: int) -> str:
@@ -102,11 +106,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True, help="Serial port, e.g. /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
-    parser.add_argument("--fps", type=float, default=5.0, help="Requested preview rate")
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=30.0,
+        help="Requested preview rate for legacy single-frame mode",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable continuous stream mode and use single-frame polling",
+    )
     parser.add_argument(
         "--assume-demo-config",
         action="store_true",
-        help="Fall back to RGB565 320x240 when config negotiation fails",
+        help="Fall back to grayscale 320x240 when config negotiation fails",
     )
     return parser.parse_args()
 
@@ -194,47 +208,76 @@ def rgb565_to_rgb888(frame: bytes, width: int, height: int) -> bytes:
     return bytes(out)
 
 
-def grayscale_to_rgb888(frame: bytes) -> bytes:
-    out = bytearray(len(frame) * 3)
-    j = 0
-    for value in frame:
-        out[j] = value
-        out[j + 1] = value
-        out[j + 2] = value
-        j += 3
-    return bytes(out)
-
-
 def frame_to_ppm_bytes(config: CameraConfig, frame: bytes) -> bytes:
     if config.image_mode == CAMERA_RGB565:
         rgb = rgb565_to_rgb888(frame, config.width, config.height)
-    elif config.image_mode == CAMERA_GRAYSCALE:
-        rgb = grayscale_to_rgb888(frame)
-    else:
-        raise ValueError(f"Unsupported image mode for preview: {config.image_mode}")
+        header = f"P6\n{config.width} {config.height}\n255\n".encode("ascii")
+        return header + rgb
+    if config.image_mode == CAMERA_GRAYSCALE:
+        header = f"P5\n{config.width} {config.height}\n255\n".encode("ascii")
+        return header + frame
+    raise ValueError(f"Unsupported image mode for preview: {config.image_mode}")
 
-    header = f"P6\n{config.width} {config.height}\n255\n".encode("ascii")
-    return header + rgb
+
+def compute_integer_scale(
+    root: tk.Tk, status_label: tk.Label, config: CameraConfig
+) -> int:
+    available_width = max(config.width, root.winfo_width() - 24)
+    available_height = max(
+        config.height,
+        root.winfo_height()
+        - status_label.winfo_height()
+        - 24,
+    )
+    scale_x = max(1, available_width // config.width)
+    scale_y = max(1, available_height // config.height)
+    return max(1, min(scale_x, scale_y))
 
 
-def request_frame(ser: serial.Serial, config: CameraConfig) -> bytes:
+def read_framed_frame(ser: serial.Serial, config: CameraConfig) -> tuple[bytes, float]:
+    read_start = time.monotonic()
+    wait_for_sequence(ser, START_SEQUENCE)
+    frame = read_exact(ser, config.frame_size)
+    stop = read_exact(ser, len(STOP_SEQUENCE))
+    if stop != STOP_SEQUENCE:
+        raise ValueError(f"Unexpected frame terminator: {stop.hex()}")
+    return frame, (time.monotonic() - read_start) * 1000.0
+
+
+def request_frame(ser: serial.Serial, config: CameraConfig) -> tuple[bytes, float]:
     last_error: Exception | None = None
     for _ in range(CONFIG_RETRIES):
         try:
             ser.reset_input_buffer()
+            request_start = time.monotonic()
             ser.write(REQUEST_FRAME)
-            wait_for_sequence(ser, START_SEQUENCE)
-            frame = read_exact(ser, config.frame_size)
-            stop = read_exact(ser, len(STOP_SEQUENCE))
-            if stop != STOP_SEQUENCE:
-                raise ValueError(f"Unexpected frame terminator: {stop.hex()}")
-            return frame
+            frame, _ = read_framed_frame(ser, config)
+            return frame, (time.monotonic() - request_start) * 1000.0
         except (TimeoutError, ValueError, serial.SerialException) as exc:
             last_error = exc
             time.sleep(0.1)
     if last_error is None:
         raise TimeoutError("Timed out while requesting frame")
     raise last_error
+
+
+def read_stream_frame(ser: serial.Serial, config: CameraConfig) -> tuple[bytes, float]:
+    return read_framed_frame(ser, config)
+
+
+def try_enable_stream_mode(ser: serial.Serial, config: CameraConfig) -> bool:
+    try:
+        ser.reset_input_buffer()
+        ser.write(REQUEST_STREAM_START)
+        read_stream_frame(ser, config)
+        return True
+    except (TimeoutError, ValueError, serial.SerialException):
+        try:
+            ser.write(REQUEST_STREAM_STOP)
+        except serial.SerialException:
+            pass
+        ser.reset_input_buffer()
+        return False
 
 
 def try_read_inference_result(ser: serial.Serial) -> InferenceResult | None:
@@ -264,7 +307,7 @@ def try_read_inference_result(ser: serial.Serial) -> InferenceResult | None:
 
         prep_ms: int | None = None
         inference_ms = int.from_bytes(payload[12:14], byteorder="little", signed=False)
-        transfer_ms: int | None = None
+        grab_ms: int | None = None
 
         extra = bytearray()
         while len(extra) < 4:
@@ -274,11 +317,11 @@ def try_read_inference_result(ser: serial.Serial) -> InferenceResult | None:
             extra.extend(chunk)
 
         if len(extra) == 2:
-            transfer_ms = int.from_bytes(extra, byteorder="little", signed=False)
+            grab_ms = int.from_bytes(extra, byteorder="little", signed=False)
         elif len(extra) == 4:
             prep_ms = inference_ms
             inference_ms = int.from_bytes(extra[0:2], byteorder="little", signed=False)
-            transfer_ms = int.from_bytes(extra[2:4], byteorder="little", signed=False)
+            grab_ms = int.from_bytes(extra[2:4], byteorder="little", signed=False)
     finally:
         ser.timeout = previous_timeout
 
@@ -291,7 +334,7 @@ def try_read_inference_result(ser: serial.Serial) -> InferenceResult | None:
         score1=int.from_bytes(payload[8:12], byteorder="little", signed=True),
         prep_ms=prep_ms,
         inference_ms=inference_ms,
-        transfer_ms=transfer_ms,
+        grab_ms=grab_ms,
     )
 
 
@@ -304,7 +347,7 @@ def open_serial(port: str, baud: int) -> serial.Serial:
 
 def demo_fallback_config() -> CameraConfig:
     return CameraConfig(
-        image_mode=CAMERA_RGB565,
+        image_mode=CAMERA_GRAYSCALE,
         resolution=CAMERA_R320x240,
         width=320,
         height=240,
@@ -342,21 +385,30 @@ def main() -> int:
 
     root = tk.Tk()
     root.title("Nicla Vision Preview")
+    root.geometry("960x720")
 
     label = tk.Label(root, text="Connecting...")
-    label.pack()
+    label.pack(fill="x")
 
     image_label = tk.Label(root)
-    image_label.pack()
+    image_label.pack(fill="both", expand=True)
 
     frame_count = 0
-    frame_delay_s = 1.0 / args.fps if args.fps > 0 else 0.2
+    frame_delay_s = 1.0 / args.fps if args.fps > 0 else 0.0
     ser, config = connect_with_config(args.port, args.baud, args.assume_demo_config)
+    stream_mode = False
+    if not args.no_stream:
+        stream_mode = try_enable_stream_mode(ser, config)
+        print(f"[preview] stream_mode={'on' if stream_mode else 'off'}")
 
     try:
         while True:
             try:
-                frame = request_frame(ser, config)
+                loop_start = time.monotonic()
+                if stream_mode:
+                    frame, rx_ms = read_stream_frame(ser, config)
+                else:
+                    frame, rx_ms = request_frame(ser, config)
                 inference = try_read_inference_result(ser)
             except (TimeoutError, ValueError, serial.SerialException) as exc:
                 label.configure(text=f"Reconnecting after serial error: {exc}")
@@ -369,13 +421,21 @@ def main() -> int:
                 ser, config = connect_with_config(
                     args.port, args.baud, args.assume_demo_config
                 )
+                stream_mode = False
+                if not args.no_stream:
+                    stream_mode = try_enable_stream_mode(ser, config)
+                    print(f"[preview] stream_mode={'on' if stream_mode else 'off'}")
                 continue
 
+            decode_start = time.monotonic()
             ppm = frame_to_ppm_bytes(config, frame)
-            image = tk.PhotoImage(
-                data=ppm.decode("latin1"),
-                format="PPM",
-            )
+            image = tk.PhotoImage(data=ppm.decode("latin1"), format="PPM")
+            scale = compute_integer_scale(root, label, config)
+            if scale > 1:
+                image = image.zoom(scale, scale)
+            decode_ms = (time.monotonic() - decode_start) * 1000.0
+
+            ui_start = time.monotonic()
             image_label.configure(image=image)
             image_label.image = image
 
@@ -390,19 +450,26 @@ def main() -> int:
                     if inference.prep_ms is not None:
                         status += f"  Prep: {inference.prep_ms} ms"
                     status += f"  Infer: {inference.inference_ms} ms"
-                    if inference.transfer_ms is not None:
-                        status += f"  Xfer: {inference.transfer_ms} ms"
+                    if inference.grab_ms is not None:
+                        status += f"  Grab: {inference.grab_ms} ms"
                 else:
                     status += f"  Infer: FAIL  status={inference.akida_status}"
                     if inference.prep_ms is not None:
                         status += f"  Prep: {inference.prep_ms} ms"
                     status += f"  Infer: {inference.inference_ms} ms"
-                    if inference.transfer_ms is not None:
-                        status += f"  Xfer: {inference.transfer_ms} ms"
+                    if inference.grab_ms is not None:
+                        status += f"  Grab: {inference.grab_ms} ms"
+            ui_ms = (time.monotonic() - ui_start) * 1000.0
+            host_ms = decode_ms + ui_ms
+            total_ms = (time.monotonic() - loop_start) * 1000.0
+            status += f"  RX: {rx_ms:.0f} ms  Host: {host_ms:.0f} ms"
+            if stream_mode:
+                status += f"  Loop: {total_ms:.0f} ms"
             label.configure(text=status)
             root.update_idletasks()
             root.update()
-            time.sleep(frame_delay_s)
+            if not stream_mode and frame_delay_s > 0.0:
+                time.sleep(frame_delay_s)
     except tk.TclError as exc:
         print(f"[preview] tkinter error: {exc}")
         return 0
@@ -410,6 +477,11 @@ def main() -> int:
         print("[preview] interrupted")
         return 0
     finally:
+        try:
+            if stream_mode:
+                ser.write(REQUEST_STREAM_STOP)
+        except serial.SerialException:
+            pass
         ser.close()
 
 

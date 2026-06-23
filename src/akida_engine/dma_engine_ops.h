@@ -45,7 +45,7 @@ dma::addr enqueue_descriptor(HardwareDriver* driver, const Engine& dma,
 // function is doing).
 // - Waits for descriptor to be processed
 // - Turns DMA off
-void process(HardwareDriver* driver, const Config& dma,
+bool process(HardwareDriver* driver, const Config& dma,
              const Descriptor& descriptor);
 
 // Used in single pass: return ID of last processed job
@@ -116,11 +116,15 @@ void init_default_dma(HardwareDriver* driver, const Engine& dma,
                       uint32_t number_of_descriptors);
 
 // Turn config DMA on and running, and wait for config DMA to configure NPs
-void enable_config_dma_multipass(HardwareDriver* driver, const Config& dma);
+bool enable_config_dma_multipass(HardwareDriver* driver, const Config& dma);
 
 // wait for config DMA to process a descriptor
-void wait_config_dma_descriptor_complete(HardwareDriver* driver,
+bool wait_config_dma_descriptor_complete(HardwareDriver* driver,
                                          const Config& dma);
+
+void clear_runtime_fault();
+bool has_runtime_fault();
+const char* runtime_fault_message();
 
 // Enqueue descriptor at "extra descriptors" location.
 // This works if we have only 1 total extra descriptor, which is our use case,

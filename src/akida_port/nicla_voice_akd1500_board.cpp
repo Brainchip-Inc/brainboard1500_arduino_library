@@ -66,7 +66,11 @@ static inline void dump_spim_snapshot(akida::HardwareDriver& driver,
       static_cast<unsigned long>(driver.read32(kSpiMXipIncrInst)));
 }
 constexpr uint32_t kCtrlEnSpiS2mMask = (1u << 16);
-constexpr uint32_t kS2mPhaseGapMs = 250u;
+// The original 250 ms guard band is far larger than the observed settle time
+// needed on the Nicla Vision + BB15 path and dominates cold-start latency.
+// Keep a conservative non-zero pause while removing the extra ~1 s of startup
+// overhead paid across repeated S2M enter/leave transitions.
+constexpr uint32_t kS2mPhaseGapMs = 25u;
 constexpr uint8_t kFlashCmdResetEnable = 0x66u;
 constexpr uint8_t kFlashCmdResetMemory = 0x99u;
 constexpr uint8_t kFlashCmdReleasePowerDown = 0xABu;
@@ -110,41 +114,45 @@ constexpr uint32_t pack_jedec(uint8_t manufacturer_id, uint8_t memory_type,
 constexpr uint32_t kWinbondW25Q64JWCapacityBytes = 0x00800000u;
 constexpr uint32_t kRenesasAt25Sl321CapacityBytes = 0x00400000u;
 
-const FlashProfile kFlashProfiles[] = {
-    {
-        "winbond_w25q64jw",
-        0xEFu,
-        0x60u,
-        0x17u,
-        kWinbondW25Q64JWCapacityBytes,
-        akida::SpiFlashRuntimeConfig{0x6Bu, 0x0u, 0x8u, false, 0x00u},
-        kFlashCmdReadStatus2,
-        kFlashCmdWriteStatus2,
-        kFlashStatus2QuadEnable,
-    },
-    {
-        "winbond_w25q64jw_eb",
-        0xEFu,
-        0x60u,
-        0x17u,
-        kWinbondW25Q64JWCapacityBytes,
-        akida::SpiFlashRuntimeConfig{0xEBu, 0x1u, 0xAu, false, 0x00u},
-        kFlashCmdReadStatus2,
-        kFlashCmdWriteStatus2,
-        kFlashStatus2QuadEnable,
-    },
-    {
-        "renesas_at25sl321",
-        0x1Fu,
-        0x42u,
-        0x16u,
-        kRenesasAt25Sl321CapacityBytes,
-        akida::SpiFlashRuntimeConfig{0x6Bu, 0x0u, 0x8u, false, 0x00u},
-        kFlashCmdReadStatus2,
-        kFlashCmdWriteStatus2,
-        kFlashStatus2QuadEnable,
-    },
+constexpr FlashProfile kWinbondW25Q64JWProfile = {
+    "winbond_w25q64jw",
+    0xEFu,
+    0x60u,
+    0x17u,
+    kWinbondW25Q64JWCapacityBytes,
+    akida::SpiFlashRuntimeConfig{0x6Bu, 0x0u, 0x8u, false, 0x00u},
+    kFlashCmdReadStatus2,
+    kFlashCmdWriteStatus2,
+    kFlashStatus2QuadEnable,
 };
+
+constexpr FlashProfile kRenesasAt25Sl321Profile = {
+    "renesas_at25sl321",
+    0x1Fu,
+    0x42u,
+    0x16u,
+    kRenesasAt25Sl321CapacityBytes,
+    akida::SpiFlashRuntimeConfig{0x6Bu, 0x0u, 0x8u, false, 0x00u},
+    kFlashCmdReadStatus2,
+    kFlashCmdWriteStatus2,
+    kFlashStatus2QuadEnable,
+};
+
+const FlashProfile kFlashProfiles[] = {
+    kWinbondW25Q64JWProfile,
+    kRenesasAt25Sl321Profile,
+};
+
+const FlashProfile* winbond_w25q64jw_eb_profile() {
+  static const FlashProfile profile = []() {
+    FlashProfile variant = kWinbondW25Q64JWProfile;
+    variant.name = "winbond_w25q64jw_eb";
+    variant.runtime_config =
+        akida::SpiFlashRuntimeConfig{0xEBu, 0x1u, 0xAu, false, 0x00u};
+    return variant;
+  }();
+  return &profile;
+}
 
 void spi_delay_us(uint32_t delay_us) {
   volatile uint32_t cycles = delay_us * 100u;
@@ -737,7 +745,10 @@ const FlashProfile* find_flash_profile_by_name(const char* name) {
     return find_flash_profile(0xEFu, 0x60u, 0x17u);
   }
   if (std::strcmp(name, "winbond_eb") == 0) {
-    return find_flash_profile_by_name("winbond_w25q64jw_eb");
+    return winbond_w25q64jw_eb_profile();
+  }
+  if (std::strcmp(name, "winbond_w25q64jw_eb") == 0) {
+    return winbond_w25q64jw_eb_profile();
   }
   if (std::strcmp(name, "renesas") == 0) {
     return find_flash_profile(0x1Fu, 0x42u, 0x16u);
@@ -747,7 +758,8 @@ const FlashProfile* find_flash_profile_by_name(const char* name) {
 
 bool apply_flash_profile(akida::Akd1500SpiDriver& driver,
                          ArduinoSpiDriver& spi_driver, uint8_t bridge_cs_pin,
-                         const FlashProfile& profile, uint32_t* jedec_out) {
+                         const FlashProfile& profile, uint32_t* jedec_out,
+                         bool validate_jedec = true) {
   uint32_t ctrl_before = 0u;
   if (!s2m_enter(driver, &ctrl_before)) {
     AKD1500_LIBRARY_LOG("[AKD1500][s2m] enter failed\r\n");
@@ -764,31 +776,40 @@ bool apply_flash_profile(akida::Akd1500SpiDriver& driver,
   uint8_t manufacturer_id = 0u;
   uint8_t memory_type = 0u;
   uint8_t capacity_id = 0u;
-  ok &= read_flash_jedec(spi_driver, bridge_cs_pin, &manufacturer_id,
-                         &memory_type, &capacity_id);
-  const uint32_t detected_jedec =
-      pack_jedec(manufacturer_id, memory_type, capacity_id);
-  if (jedec_out != nullptr) {
-    *jedec_out = detected_jedec;
-  }
-  if (!ok) {
-    AKD1500_LIBRARY_LOG("[AKD1500][s2m] flash JEDEC read failed\r\n");
-    s2m_leave(driver, spi_driver, bridge_cs_pin, ctrl_before);
-    return false;
-  }
-  if (detected_jedec !=
-      pack_jedec(profile.manufacturer_id, profile.memory_type,
-                 profile.capacity_id)) {
-    AKD1500_LIBRARY_LOG(
-        "[AKD1500][s2m] flash profile mismatch expected=%02X:%02X:%02X got=%02X:%02X:%02X\r\n",
-        static_cast<unsigned>(profile.manufacturer_id),
-        static_cast<unsigned>(profile.memory_type),
-        static_cast<unsigned>(profile.capacity_id),
-        static_cast<unsigned>(manufacturer_id),
-        static_cast<unsigned>(memory_type),
-        static_cast<unsigned>(capacity_id));
-    s2m_leave(driver, spi_driver, bridge_cs_pin, ctrl_before);
-    return false;
+  if (validate_jedec) {
+    ok &= read_flash_jedec(spi_driver, bridge_cs_pin, &manufacturer_id,
+                           &memory_type, &capacity_id);
+    const uint32_t detected_jedec =
+        pack_jedec(manufacturer_id, memory_type, capacity_id);
+    if (jedec_out != nullptr) {
+      *jedec_out = detected_jedec;
+    }
+    if (!ok) {
+      AKD1500_LIBRARY_LOG("[AKD1500][s2m] flash JEDEC read failed\r\n");
+      s2m_leave(driver, spi_driver, bridge_cs_pin, ctrl_before);
+      return false;
+    }
+    if (detected_jedec !=
+        pack_jedec(profile.manufacturer_id, profile.memory_type,
+                   profile.capacity_id)) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][s2m] flash profile mismatch expected=%02X:%02X:%02X got=%02X:%02X:%02X\r\n",
+          static_cast<unsigned>(profile.manufacturer_id),
+          static_cast<unsigned>(profile.memory_type),
+          static_cast<unsigned>(profile.capacity_id),
+          static_cast<unsigned>(manufacturer_id),
+          static_cast<unsigned>(memory_type),
+          static_cast<unsigned>(capacity_id));
+      s2m_leave(driver, spi_driver, bridge_cs_pin, ctrl_before);
+      return false;
+    }
+  } else {
+    manufacturer_id = profile.manufacturer_id;
+    memory_type = profile.memory_type;
+    capacity_id = profile.capacity_id;
+    if (jedec_out != nullptr) {
+      *jedec_out = pack_jedec(manufacturer_id, memory_type, capacity_id);
+    }
   }
 
   const uint8_t status = flash_bridge_read_status(spi_driver, bridge_cs_pin);
@@ -1016,6 +1037,40 @@ bool AKD1500Board::ensure_spi_flash_runtime_profile() {
   }
 
   detected_flash_profile_attempted_ = true;
+  const bool forced_profile =
+      config_.forced_flash_profile != nullptr &&
+      config_.forced_flash_profile[0] != '\0' &&
+      std::strcmp(config_.forced_flash_profile, "auto") != 0;
+  if (forced_profile && config_.assume_forced_flash_profile_ready) {
+    const FlashProfile* profile =
+        find_flash_profile_by_name(config_.forced_flash_profile);
+    detected_flash_name_ = (profile != nullptr) ? profile->name : "unsupported";
+    if (profile == nullptr) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][s2m] assumed flash profile not found name=%s\r\n",
+          config_.forced_flash_profile);
+      return false;
+    }
+    detected_flash_jedec_ = pack_jedec(profile->manufacturer_id,
+                                       profile->memory_type,
+                                       profile->capacity_id);
+    detected_flash_runtime_config_ = profile->runtime_config;
+    detected_flash_profile_supported_ = true;
+    akida_driver_->set_spi_flash_runtime_config(profile->runtime_config);
+    akida_driver_->reinit_spi_flash_runtime();
+    AKD1500_LIBRARY_LOG(
+        "[AKD1500][s2m] flash profile assumed ready name=%s jedec=%02X:%02X:%02X read=0x%02X trans=%u wait=%u mode_en=%u mode=0x%02X\r\n",
+        profile->name, static_cast<unsigned>(profile->manufacturer_id),
+        static_cast<unsigned>(profile->memory_type),
+        static_cast<unsigned>(profile->capacity_id),
+        static_cast<unsigned>(profile->runtime_config.read_opcode),
+        static_cast<unsigned>(profile->runtime_config.transfer_type),
+        static_cast<unsigned>(profile->runtime_config.wait_cycles),
+        profile->runtime_config.mode_bits_enabled ? 1u : 0u,
+        static_cast<unsigned>(profile->runtime_config.mode_bits_value));
+    return true;
+  }
+
   uint32_t detected_jedec = 0u;
   const uint32_t original_spi_clock_hz = spi_driver_.clock_hz();
   const uint32_t flash_spi_clock_hz =
@@ -1057,14 +1112,19 @@ bool AKD1500Board::ensure_spi_flash_runtime_profile() {
     return false;
   }
 
-  const bool forced_profile =
-      config_.forced_flash_profile != nullptr &&
-      config_.forced_flash_profile[0] != '\0' &&
-      std::strcmp(config_.forced_flash_profile, "auto") != 0;
-  const FlashProfile* profile =
-      forced_profile ? find_flash_profile_by_name(config_.forced_flash_profile)
-                     : find_flash_profile(manufacturer_id, memory_type,
-                                          capacity_id);
+  const FlashProfile* profile = nullptr;
+  if (forced_profile) {
+    profile = find_flash_profile_by_name(config_.forced_flash_profile);
+    if (profile != nullptr) {
+      manufacturer_id = profile->manufacturer_id;
+      memory_type = profile->memory_type;
+      capacity_id = profile->capacity_id;
+      detected_jedec = pack_jedec(manufacturer_id, memory_type, capacity_id);
+      detected_flash_jedec_ = detected_jedec;
+    }
+  } else {
+    profile = find_flash_profile(manufacturer_id, memory_type, capacity_id);
+  }
   detected_flash_name_ = (profile != nullptr) ? profile->name : "unsupported";
   if (profile == nullptr) {
     if (forced_profile) {
@@ -1088,7 +1148,7 @@ bool AKD1500Board::ensure_spi_flash_runtime_profile() {
 
   detected_flash_profile_supported_ = apply_flash_profile(
       *akida_driver_, spi_driver_, config_.pins.bridge_cs, *profile,
-      &detected_flash_jedec_);
+      &detected_flash_jedec_, !forced_profile);
   restore_spi_clock();
   if (!detected_flash_profile_supported_) {
     AKD1500_LIBRARY_LOG(

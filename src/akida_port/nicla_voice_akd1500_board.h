@@ -27,6 +27,7 @@ struct AKD1500BoardConfig {
   uint32_t visible_memory_base = 0u;
   uint32_t visible_memory_size = 0u;
   const char* forced_flash_profile = nullptr;
+  bool assume_forced_flash_profile_ready = false;
 };
 
 bool stage_program_data_to_bridge_flash(const AKD1500BoardConfig& config,

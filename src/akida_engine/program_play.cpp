@@ -312,6 +312,9 @@ static inline TrackedSpan write_track_on_device(
 static dma::addr play_track(HardwareDeviceImpl* device,
                             const ProgramInfo& program_info,
                             const fb::TrackSpan& track_span, bool single_pass) {
+  if (dma::has_runtime_fault()) {
+    return 0u;
+  }
   // 1st write track data, put buffer on device, and get its address
   const auto tracked_span = write_track_on_device(device, program_info, track_span);
 
@@ -325,8 +328,10 @@ static dma::addr play_track(HardwareDeviceImpl* device,
 
   if (single_pass) {
     // in single pass, we need to wait for descriptor to complete
-    dma::wait_config_dma_descriptor_complete(device->driver(),
-                                             device->dma_config());
+    if (!dma::wait_config_dma_descriptor_complete(device->driver(),
+                                                  device->dma_config())) {
+      return 0u;
+    }
     // then release track data
     if (tracked_span.staged_external) {
       device->mem()->free(tracked_span.device_address);
@@ -382,6 +387,9 @@ static dma::addr play_record(HardwareDeviceImpl* device,
   if (tracks_spans != nullptr) {
     for (const auto* track_span : *tracks_spans) {
       descriptor_address = play_track(device, program_info, *track_span, single_pass);
+      if (dma::has_runtime_fault()) {
+        return 0u;
+      }
     }
   }
 
@@ -530,6 +538,12 @@ void play_single_pass(HardwareDeviceImpl* device,
         static_cast<unsigned long>(i + 1),
         static_cast<unsigned long>(records_count));
     play_record(device, program_info, *records_spans->Get(i), true);
+    if (dma::has_runtime_fault()) {
+      AKIDA_NICLA_PROGRAM_PLAY_LOG(
+          "[AKIDA][PROGRAM] single-pass abort fault=%s\r\n",
+          dma::runtime_fault_message());
+      return;
+    }
   }
 
   const auto* learn = program_info_fb->learning_layer_span();
@@ -542,7 +556,13 @@ void play_single_pass(HardwareDeviceImpl* device,
                                      ? learn->learning_registers_span()
                                      : learn->inference_registers_span();
     play_track(device, program_info, *registers_span, true);
+    if (dma::has_runtime_fault()) {
+      return;
+    }
     play_record(device, program_info, *learn->ram_span(), true);
+    if (dma::has_runtime_fault()) {
+      return;
+    }
   }
   play_epg(device, program_info.program_info_);
   AKIDA_NICLA_PROGRAM_PLAY_LOG("[AKIDA][PROGRAM] single-pass done\r\n");
@@ -581,6 +601,9 @@ void play_multi_pass(HardwareDeviceImpl* device,
       // get number of NP tracks (corresponding to number of DMA descriptors).
       uint32_t np_tracks_size = record_span->tracks()->size();
       play_record(device, program_info, *record_span, false);
+      if (dma::has_runtime_fault()) {
+        return;
+      }
       np_tracks_played += np_tracks_size;
     }
 
@@ -595,6 +618,9 @@ void play_multi_pass(HardwareDeviceImpl* device,
 
       auto learn_desc_address = play_track(device, program_info,
                                            *inference_registers, false);
+      if (dma::has_runtime_fault()) {
+        return;
+      }
       // store the address of descriptor that correspond to the learning layer
       // registers because we will need to edit this descriptor to make it point
       // to the learning registers or inference registers when enable/disable
@@ -602,6 +628,9 @@ void play_multi_pass(HardwareDeviceImpl* device,
       multipass_memory->update_learn_descriptor_addr(learn_desc_address);
       write_track_on_device(device, program_info, *learn_registers);
       play_record(device, program_info, *ram, false);
+      if (dma::has_runtime_fault()) {
+        return;
+      }
       np_tracks_played += np_tracks_size;
     }
 

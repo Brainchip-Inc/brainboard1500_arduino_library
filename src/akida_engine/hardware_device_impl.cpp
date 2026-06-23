@@ -801,6 +801,7 @@ ProgramInfo HardwareDeviceImpl::program(const uint8_t* program, size_t size) {
   // init config dma
   AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM] init config DMA\r\n");
   dma::init_config_dma(driver_, dma_config_, program_info);
+  dma::clear_runtime_fault();
 
   if (multi_pass_en) {
     // alloc required multi pass memory
@@ -812,10 +813,21 @@ ProgramInfo HardwareDeviceImpl::program(const uint8_t* program, size_t size) {
     // Enable dma config for multipass mode
     AKIDA_NICLA_PROGRAM_LOG(
         "[AKIDA][PROGRAM] enable multipass config DMA\r\n");
-    dma::enable_config_dma_multipass(driver_, dma_config_);
+    if (!dma::enable_config_dma_multipass(driver_, dma_config_)) {
+      AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM] config dma fault=%s\r\n",
+                              dma::runtime_fault_message());
+      core_reset(driver_);
+      return ProgramInfo();
+    }
   } else {
     AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM] play single-pass program\r\n");
     program::play_single_pass(this, program_info);
+    if (dma::has_runtime_fault()) {
+      AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM] config dma fault=%s\r\n",
+                              dma::runtime_fault_message());
+      core_reset(driver_);
+      return ProgramInfo();
+    }
   }
 
   // enable akida global interrupts
@@ -896,6 +908,7 @@ ProgramInfo HardwareDeviceImpl::program_external_data(
   dump_spim_snapshot(driver_, "program_external_data:post_toggle_multi_pass");
   AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM_EXT] init config DMA\r\n");
   dma::init_config_dma(driver_, dma_config_, program_info);
+  dma::clear_runtime_fault();
   dump_spim_snapshot(driver_, "program_external_data:post_init_config_dma");
 
   if (multi_pass_en) {
@@ -907,7 +920,12 @@ ProgramInfo HardwareDeviceImpl::program_external_data(
     dump_spim_snapshot(driver_, "program_external_data:post_play_multi_pass");
     AKIDA_NICLA_PROGRAM_LOG(
         "[AKIDA][PROGRAM_EXT] enable multipass config DMA\r\n");
-    dma::enable_config_dma_multipass(driver_, dma_config_);
+    if (!dma::enable_config_dma_multipass(driver_, dma_config_)) {
+      AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM_EXT] config dma fault=%s\r\n",
+                              dma::runtime_fault_message());
+      core_reset(driver_);
+      return ProgramInfo();
+    }
     dump_spim_snapshot(driver_,
                        "program_external_data:post_enable_config_dma_multipass");
   } else {
@@ -915,6 +933,12 @@ ProgramInfo HardwareDeviceImpl::program_external_data(
         "[AKIDA][PROGRAM_EXT] play single-pass program\r\n");
     dump_spim_snapshot(driver_, "program_external_data:pre_play_single_pass");
     program::play_single_pass(this, program_info);
+    if (dma::has_runtime_fault()) {
+      AKIDA_NICLA_PROGRAM_LOG("[AKIDA][PROGRAM_EXT] config dma fault=%s\r\n",
+                              dma::runtime_fault_message());
+      core_reset(driver_);
+      return ProgramInfo();
+    }
     dump_spim_snapshot(driver_, "program_external_data:post_play_single_pass");
   }
 

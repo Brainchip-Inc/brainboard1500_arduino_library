@@ -44,6 +44,7 @@ struct AKD1500Options {
   uint32_t visibleMemoryBase = 0u;
   uint32_t visibleMemorySize = 0u;
   const char* forcedFlashProfile = nullptr;
+  bool assumeForcedFlashProfileReady = false;
   uint32_t postBeginSettleMs = 50u;
   uint32_t postLinkSettleMs = 50u;
   uint32_t fetchPollDelayMs = 100u;
@@ -77,6 +78,14 @@ class AKD1500RunnerBase {
   const AKD1500Error& lastError() const { return last_error_; }
   uint32_t ipVersion() const { return ip_version_; }
   bool modelLoaded() const { return model_loaded_ && program_info_.is_valid(); }
+  uint32_t detectedFlashJedec() const { return board_.detected_flash_jedec(); }
+  const char* detectedFlashName() const { return board_.detected_flash_name(); }
+  akida::SpiFlashRuntimeConfig detectedFlashRuntimeConfig() const {
+    return board_.detected_flash_runtime_config();
+  }
+  bool hasSupportedFlashProfile() const {
+    return board_.has_supported_flash_profile();
+  }
   akida::Shape inputDimensions() const;
   akida::Shape outputDimensions() const;
   bool inputIsDense() const;

@@ -10,6 +10,7 @@
 #include "akida/shape.h"
 #include "akida/sparse.h"
 #include "akida/version.h"
+#include "akida_engine/dma_engine_ops.h"
 #include "engine/akida_program_info_generated.h"
 #include "flatbuffers/base.h"
 
@@ -33,6 +34,8 @@ akida_port::AKD1500BoardConfig make_board_config(
   config.visible_memory_base = options.visibleMemoryBase;
   config.visible_memory_size = options.visibleMemorySize;
   config.forced_flash_profile = options.forcedFlashProfile;
+  config.assume_forced_flash_profile_ready =
+      options.assumeForcedFlashProfileReady;
   return config;
 }
 
@@ -559,6 +562,10 @@ AKD1500Status AKD1500FlashRunner::loadExternalModel(
       serialized_program, program_info_size, options_.externalModelAddress);
   if (!program_info.is_valid()) {
     clearLoadedModel();
+    if (akida::dma::has_runtime_fault()) {
+      return setError(AKD1500Status::ProgramFailed,
+                      akida::dma::runtime_fault_message());
+    }
     return setError(AKD1500Status::ProgramFailed, "program_external_failed");
   }
 
