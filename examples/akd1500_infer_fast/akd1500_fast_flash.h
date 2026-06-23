@@ -121,6 +121,8 @@ inline AKD1500Options make_options(const Config& config) {
   options.spiClockHz = config.akidaSpiClockHz;
   options.flashSpiClockHz = config.flashSpiClockHz;
   options.expectedIpVersion = config.expectedIpVersion;
+  options.postBeginSettleMs = 0u;
+  options.postLinkSettleMs = 0u;
   options.externalModelAddress =
       AkidaNicla::externalModelAddressFromOffset(config.externalModelOffset);
   options.forcedFlashProfile =
