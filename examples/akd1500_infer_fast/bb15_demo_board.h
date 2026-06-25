@@ -225,7 +225,7 @@ class Bb15NiclaVisionBoard {
  private:
   static constexpr uint32_t kI2cClockHz = 100000u;
   static constexpr uint32_t kAkidaResetAssertMs = 5u;
-  static constexpr uint32_t kAkidaResetReleaseSettleMs = 10u;
+  static constexpr uint32_t kAkidaResetReleaseSettleMs = 30u;
   static constexpr PinName kPowerDownPin = PA_10;
   static constexpr uint8_t kAkidaResetPin = 3u;
   static constexpr uint8_t kAkidaSleepGatePin = 2u;

@@ -21,7 +21,8 @@ constexpr uint32_t kAkidaSpiClockHz = 8000000u;
 constexpr uint32_t kFlashSpiClockHz = 2000000u;
 constexpr const char* kSketchName = "akd1500_infer_fast_model_flasher";
 constexpr const char* kLogPrefix = "[akd1500_infer_fast_model_flasher]";
-constexpr const char* kBundledModelName = "presence_regular_96_gray";
+constexpr const char* kBundledModelName =
+    "NiclaV_VWW_PersonDet_EN_USBbottom_2026-06-14";
 
 bb15_demo::Bb15NiclaVisionBoard& board() {
   static bb15_demo::Bb15NiclaVisionBoard instance;

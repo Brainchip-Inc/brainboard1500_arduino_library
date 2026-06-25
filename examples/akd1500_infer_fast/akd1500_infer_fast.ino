@@ -39,11 +39,11 @@ constexpr uint8_t kRequestFrame = 1u;
 constexpr uint8_t kRequestConfig = 2u;
 constexpr uint8_t kRequestStreamStart = 3u;
 constexpr uint8_t kRequestStreamStop = 4u;
-constexpr uint8_t kResolution = CAMERA_R160x120;
+constexpr uint8_t kResolution = CAMERA_R320x240;
 constexpr uint8_t kCameraImageMode = CAMERA_RGB565;
 constexpr uint8_t kPreviewImageMode = CAMERA_GRAYSCALE;
-constexpr uint16_t kCameraWidth = 160u;
-constexpr uint16_t kCameraHeight = 120u;
+constexpr uint16_t kCameraWidth = 320u;
+constexpr uint16_t kCameraHeight = 240u;
 constexpr uint8_t kPreviewResolution = kResolution;
 constexpr uint16_t kPreviewWidth = kCameraWidth;
 constexpr uint16_t kPreviewHeight = kCameraHeight;
@@ -54,7 +54,7 @@ constexpr size_t kCaptureFrameBytes =
 constexpr int32_t kFrameRate = 30;
 constexpr uint16_t kModelWidth = 96u;
 constexpr uint16_t kModelHeight = 96u;
-constexpr uint16_t kModelChannels = 1u;
+constexpr uint16_t kModelChannels = 3u;
 constexpr size_t kModelInputBytes =
     static_cast<size_t>(kModelWidth) * kModelHeight * kModelChannels;
 constexpr uint32_t kFlashModelOffset = 0u;
@@ -66,8 +66,12 @@ constexpr uint8_t kInferenceResultSequence[4] = {0xAC, 0x1D, 0x1A, 0xDA};
 constexpr uint8_t kStartSequence[4] = {0xFA, 0xCE, 0xFE, 0xED};
 constexpr uint8_t kStopSequence[4] = {0xDA, 0xBB, 0xAD, 0x00};
 constexpr uint32_t kPreviewSessionHoldMs = 2000u;
-constexpr uint32_t kAkidaColdResetHoldMs = 10u;
-constexpr uint32_t kAkidaReloadSettleMs = 10u;
+constexpr uint32_t kAkidaColdResetHoldMs = 40u;
+constexpr uint32_t kAkidaReloadSettleMs = 60u;
+constexpr uint32_t kAkidaRetryHoldStepMs = 10u;
+constexpr uint32_t kAkidaRetryReloadStepMs = 10u;
+constexpr uint32_t kAkidaRetryHoldMaxMs = 70u;
+constexpr uint32_t kAkidaRetryReloadMaxMs = 80u;
 constexpr uint8_t kAkidaWakeRetryLimit = 5u;
 constexpr uint32_t kBurstInferencesPerClap = 5u;
 constexpr int32_t kMicSampleRateHz = 16000;
@@ -79,7 +83,8 @@ constexpr uint16_t kClapMeanAbsThreshold = 1500u;
 constexpr uint32_t kClapCooldownMs = 1500u;
 constexpr const char* kSketchName = "akd1500_infer_fast";
 constexpr const char* kLogPrefix = "[akd1500_infer_fast]";
-constexpr const char* kBundledModelName = "presence_regular_96_gray";
+constexpr const char* kBundledModelName =
+    "NiclaV_VWW_PersonDet_EN_USBbottom_2026-06-14";
 
 // Application state shared across setup and the main inference loop.
 bool g_camera_ok = false;
@@ -562,36 +567,37 @@ void send_frame_with_inference() {
   send_inference_packet(observation);
 }
 
-// Precompute source pixel coordinates once so each frame only does lookup and
-// conversion instead of repeating the crop math.
+// Precompute the 96x96 source coordinates once so each frame only does lookup
+// and conversion instead of repeating the crop/downscale math.
 void prepare_crop_maps() {
   if (g_crop_maps_ready) {
     return;
   }
 
-  // The sensor runs at 160x120, so center-crop the shorter square region
-  // before scaling it down to the 96x96 model input.
   constexpr uint16_t kCropSize =
       (kCameraWidth < kCameraHeight) ? kCameraWidth : kCameraHeight;
   constexpr uint16_t kCropOriginX = (kCameraWidth - kCropSize) / 2u;
   constexpr uint16_t kCropOriginY = (kCameraHeight - kCropSize) / 2u;
 
   for (uint16_t x = 0; x < kModelWidth; ++x) {
-    g_crop_x[x] = kCropOriginX + static_cast<uint16_t>(
-                                     (static_cast<uint32_t>(x) * kCropSize) /
-                                     kModelWidth);
+    g_crop_x[x] = static_cast<uint16_t>(
+        kCropOriginX +
+        (static_cast<uint32_t>(x) * kCropSize) / kModelWidth);
   }
   for (uint16_t y = 0; y < kModelHeight; ++y) {
-    g_crop_y[y] = kCropOriginY + static_cast<uint16_t>(
-                                     (static_cast<uint32_t>(y) * kCropSize) /
-                                     kModelHeight);
+    g_crop_y[y] = static_cast<uint16_t>(
+        kCropOriginY +
+        (static_cast<uint32_t>(y) * kCropSize) / kModelHeight);
   }
 
   g_crop_maps_ready = true;
 }
 
-// Convert the camera's 160x120 RGB565 frame into grayscale preview pixels,
-// then center-crop and resize them into the dense 96x96x1 tensor.
+// Convert the camera's native RGB565 frame into:
+// 1. a native-resolution grayscale preview frame, and
+// 2. the artifact model's 96x96x3 RGB tensor using a 240x240 center crop,
+//    nearest-neighbor downscale, and 180 degree rotation to match the
+//    USB-bottom training orientation.
 void fill_preview_and_model_input_from_rgb565(const uint8_t* frame_rgb565) {
   prepare_crop_maps();
   for (size_t src_index = 0u, dst_index = 0u; dst_index < kPreviewFrameBytes;
@@ -608,14 +614,28 @@ void fill_preview_and_model_input_from_rgb565(const uint8_t* frame_rgb565) {
         (77u * r8 + 150u * g8 + 29u * b8) >> 8);
   }
 
-  uint8_t* dst = g_model_input;
   for (uint16_t y = 0; y < kModelHeight; ++y) {
     const uint16_t src_y = g_crop_y[y];
     for (uint16_t x = 0; x < kModelWidth; ++x) {
       const uint16_t src_x = g_crop_x[x];
       const size_t src_index =
           static_cast<size_t>(src_y) * kCameraWidth + src_x;
-      *dst++ = g_preview_frame[src_index];
+      const size_t rgb565_index = src_index * 2u;
+      const uint16_t pixel =
+          (static_cast<uint16_t>(frame_rgb565[rgb565_index]) << 8) |
+          frame_rgb565[rgb565_index + 1u];
+      const uint8_t r5 = static_cast<uint8_t>((pixel >> 11) & 0x1Fu);
+      const uint8_t g6 = static_cast<uint8_t>((pixel >> 5) & 0x3Fu);
+      const uint8_t b5 = static_cast<uint8_t>(pixel & 0x1Fu);
+      const uint8_t r8 = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+      const uint8_t g8 = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+      const uint8_t b8 = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+      const size_t dst_pixel_index =
+          static_cast<size_t>(kModelHeight - 1u - y) * kModelWidth +
+          (kModelWidth - 1u - x);
+      g_model_input[dst_pixel_index * 3u + 0u] = r8;
+      g_model_input[dst_pixel_index * 3u + 1u] = g8;
+      g_model_input[dst_pixel_index * 3u + 2u] = b8;
     }
   }
 }
@@ -817,9 +837,9 @@ bool run_one_inference() {
   Serial.print(static_cast<unsigned long>(observation.predicted_index));
   Serial.print(" label=");
   if (observation.predicted_index == 0u) {
-    Serial.print("no_presence");
+    Serial.print("no_person");
   } else if (observation.predicted_index == 1u) {
-    Serial.print("presence");
+    Serial.print("person");
   } else {
     Serial.print("class_");
     Serial.print(static_cast<unsigned long>(observation.predicted_index));
@@ -860,6 +880,24 @@ bool power_cycle_akida_off(const char* reason, uint32_t hold_ms) {
   return true;
 }
 
+uint32_t akida_retry_hold_ms(uint8_t attempt) {
+  if (attempt <= 1u) {
+    return kAkidaColdResetHoldMs;
+  }
+  const uint32_t hold_ms =
+      kAkidaColdResetHoldMs + static_cast<uint32_t>(attempt - 1u) * kAkidaRetryHoldStepMs;
+  return hold_ms > kAkidaRetryHoldMaxMs ? kAkidaRetryHoldMaxMs : hold_ms;
+}
+
+uint32_t akida_retry_reload_settle_ms(uint8_t attempt) {
+  if (attempt <= 1u) {
+    return kAkidaReloadSettleMs;
+  }
+  const uint32_t settle_ms = kAkidaReloadSettleMs +
+                             static_cast<uint32_t>(attempt - 1u) * kAkidaRetryReloadStepMs;
+  return settle_ms > kAkidaRetryReloadMaxMs ? kAkidaRetryReloadMaxMs : settle_ms;
+}
+
 bool set_free_running_mode(bool enabled, const char* source) {
   if (g_free_running_enabled == enabled) {
     Serial.print(kLogPrefix);
@@ -898,6 +936,8 @@ bool wake_akida_for_inference(const char* reason) {
   }
 
   for (uint8_t attempt = 1u; attempt <= kAkidaWakeRetryLimit; ++attempt) {
+    const uint32_t hold_reset_ms = akida_retry_hold_ms(attempt);
+    const uint32_t reload_settle_ms = akida_retry_reload_settle_ms(attempt);
     Serial.print(kLogPrefix);
     Serial.print(" akida_wake reason=");
     Serial.print(reason == nullptr ? "unspecified" : reason);
@@ -906,12 +946,14 @@ bool wake_akida_for_inference(const char* reason) {
     Serial.print("/");
     Serial.print(static_cast<unsigned long>(kAkidaWakeRetryLimit));
     Serial.print(" hold_reset_ms=");
-    Serial.println(static_cast<unsigned long>(kAkidaColdResetHoldMs));
+    Serial.print(static_cast<unsigned long>(hold_reset_ms));
+    Serial.print(" reload_settle_ms=");
+    Serial.println(static_cast<unsigned long>(reload_settle_ms));
 
-    if (!board().coldBootAkidaIntoExternalFlashMode(kAkidaColdResetHoldMs)) {
+    if (!board().coldBootAkidaIntoExternalFlashMode(hold_reset_ms)) {
       print_failure("board_cold_boot", board().lastError());
     } else {
-      delay(kAkidaReloadSettleMs);
+      delay(reload_settle_ms);
       const uint32_t reload_start_ms = millis();
       if (prepare_model()) {
         Serial.print(kLogPrefix);
@@ -942,12 +984,13 @@ bool wake_akida_for_inference(const char* reason) {
 
     if (attempt < kAkidaWakeRetryLimit &&
         !power_cycle_akida_off("wake_retry_power_cycle",
-                               kAkidaColdResetHoldMs)) {
+                               hold_reset_ms)) {
       return false;
     }
   }
 
-  power_cycle_akida_off("wake_retry_exhausted", kAkidaColdResetHoldMs);
+  power_cycle_akida_off("wake_retry_exhausted",
+                        akida_retry_hold_ms(kAkidaWakeRetryLimit));
   return false;
 }
 
@@ -1040,7 +1083,7 @@ void setup() {
 
   Serial.print(kLogPrefix);
   Serial.println(
-      " preprocess=rgb565_to_gray160x120 preview_native center_crop_120 resize_nn_96");
+      " preprocess=rgb565_preview320x240 model=center_crop_240 resize_nn_96 rgb888 rotate180");
   Serial.print(kLogPrefix);
   Serial.println(
       " loop=listen -> clap -> wake -> 5x infer -> sleep or free_run or preview_stream");
