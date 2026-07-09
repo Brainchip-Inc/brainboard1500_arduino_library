@@ -276,18 +276,46 @@ static inline bool is_spi_master_memory_window(uint32_t address) {
 }
 
 template <int burst_word_size>
+struct BurstTraits;
+
+template <>
+struct BurstTraits<1> {
+    static constexpr uint8_t size_code = 0u;
+    static constexpr akd1500::spi::BurstWordSize word_count =
+        akd1500::spi::BurstWordSize::x1;
+};
+
+template <>
+struct BurstTraits<4> {
+    static constexpr uint8_t size_code = 1u;
+    static constexpr akd1500::spi::BurstWordSize word_count =
+        akd1500::spi::BurstWordSize::x4;
+};
+
+template <>
+struct BurstTraits<8> {
+    static constexpr uint8_t size_code = 2u;
+    static constexpr akd1500::spi::BurstWordSize word_count =
+        akd1500::spi::BurstWordSize::x8;
+};
+
+template <>
+struct BurstTraits<16> {
+    static constexpr uint8_t size_code = 3u;
+    static constexpr akd1500::spi::BurstWordSize word_count =
+        akd1500::spi::BurstWordSize::x16;
+};
+
+template <>
+struct BurstTraits<32> {
+    static constexpr uint8_t size_code = 4u;
+    static constexpr akd1500::spi::BurstWordSize word_count =
+        akd1500::spi::BurstWordSize::x32;
+};
+
+template <int burst_word_size>
 constexpr uint8_t burst_size_code() {
-    if constexpr (burst_word_size == 32) {
-        return 4u;
-    } else if constexpr (burst_word_size == 16) {
-        return 3u;
-    } else if constexpr (burst_word_size == 8) {
-        return 2u;
-    } else if constexpr (burst_word_size == 4) {
-        return 1u;
-    } else {
-        return 0u;  // 1 word
-    }
+    return BurstTraits<burst_word_size>::size_code;
 }
 
 static inline void spis_write_then_read(AbstractSpiDriver* driver,
@@ -409,18 +437,37 @@ static bool spis_write_spim_window_burst(AbstractSpiDriver* driver,
 
 template <int burst_word_size>
 constexpr akd1500::spi::BurstWordSize data_word_count_from_burst() {
-    if constexpr (burst_word_size == 32) {
-        return akd1500::spi::BurstWordSize::x32;
-    } else if constexpr (burst_word_size == 16) {
-        return akd1500::spi::BurstWordSize::x16;
-    } else if constexpr (burst_word_size == 8) {
-        return akd1500::spi::BurstWordSize::x8;
-    } else if constexpr (burst_word_size == 4) {
-        return akd1500::spi::BurstWordSize::x4;
-    } else if constexpr (burst_word_size == 1) {
-        return akd1500::spi::BurstWordSize::x1;
-    }
+    return BurstTraits<burst_word_size>::word_count;
 }
+
+template <int burst_word_size>
+static void spi_write_burst(AbstractSpiDriver *driver, uint32_t address,
+                            const uint32_t *data);
+
+template <int burst_word_size>
+static void spi_read_burst(AbstractSpiDriver *driver, uint32_t address,
+                           uint32_t *data);
+
+template <akd1500::spi::Commands command, int burst_word_size>
+struct BurstIo;
+
+template <int burst_word_size>
+struct BurstIo<akd1500::spi::Commands::Write, burst_word_size> {
+    template <typename buffer>
+    static inline void transfer(AbstractSpiDriver* driver, uint32_t address,
+                                buffer data) {
+        spi_write_burst<burst_word_size>(driver, address, data);
+    }
+};
+
+template <int burst_word_size>
+struct BurstIo<akd1500::spi::Commands::Read, burst_word_size> {
+    template <typename buffer>
+    static inline void transfer(AbstractSpiDriver* driver, uint32_t address,
+                                buffer data) {
+        spi_read_burst<burst_word_size>(driver, address, data);
+    }
+};
 void spi_header(akd1500::spi::Commands command,
                 akd1500::spi::BurstWordSize word_count, const uint32_t address,
                 uint8_t *buffer) {
@@ -575,11 +622,7 @@ static inline void loop_bursts(AbstractSpiDriver *driver, uint32_t *address,
                                buffer *data, size_t *word_size) {
     // just loop until we cannot burst with the remaining size
     while (*word_size >= burst_word_size) {
-        if constexpr (command == akd1500::spi::Commands::Write) {
-            spi_write_burst<burst_word_size>(driver, *address, *data);
-        } else {
-            spi_read_burst<burst_word_size>(driver, *address, *data);
-        }
+        BurstIo<command, burst_word_size>::transfer(driver, *address, *data);
         *word_size -= burst_word_size;
         *address +=
             static_cast<uint32_t>(words_to_bytes_size<burst_word_size>());

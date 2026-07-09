@@ -1,6 +1,8 @@
 #include "dma_events_ops.h"
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include "akida/dense.h"
@@ -21,6 +23,11 @@
 #include "dma_desc_ops.h"
 
 namespace akida {
+
+template <typename T, typename... Args>
+static std::unique_ptr<T> make_unique_compat(Args&&... args) {
+  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
 
 static void set_cnp_event(Index x, Index y, Index z, uint8_t v,
                           dma::w32* evt_word1, dma::w32* evt_word2) {
@@ -293,8 +300,8 @@ DmaEventsPtr to_dma_events(const Tensor& inputs, bool input_is_fnp) {
       add_dummy_event_fnp(inputs, &event_data);
     }
     nb_words = event_data.size();
-    result = std::make_unique<DmaFnpEvents>(inputs.dimensions(),
-                                            std::move(event_data));
+    result = make_unique_compat<DmaFnpEvents>(inputs.dimensions(),
+                                              std::move(event_data));
   } else {
     event_data = format_cnp_events(inputs);
     // workaround when null event
@@ -302,8 +309,8 @@ DmaEventsPtr to_dma_events(const Tensor& inputs, bool input_is_fnp) {
       add_dummy_event_cnp(inputs, &event_data);
     }
     nb_words = event_data.size();
-    result = std::make_unique<DmaCnpEvents>(inputs.dimensions(),
-                                            std::move(event_data));
+    result = make_unique_compat<DmaCnpEvents>(inputs.dimensions(),
+                                              std::move(event_data));
   }
   // check we are below the maximum number of events
   auto max_dma_events = dma::max_dma_events();
@@ -372,24 +379,24 @@ TensorUniquePtr dma_events_read_outputs(HardwareDriver* driver,
       dma::wbuffer output_events(output_word_size);
       driver->read(read_offset_addr, output_events.data(), output_bytes_size);
       // We can directly wrap the output events in a DmaCnpEvents sparse tensor
-      return std::make_unique<DmaCnpEvents>(output_dimensions,
-                                            std::move(output_events));
+      return make_unique_compat<DmaCnpEvents>(output_dimensions,
+                                              std::move(output_events));
     }
     case OutputFormat::FullyActivations: {
       // Read back data aligned on 32-bit words
       dma::wbuffer output_events(output_word_size);
       driver->read(read_offset_addr, output_events.data(), output_bytes_size);
       // We can directly wrap the output events in a DmaFnpEvents sparse tensor
-      return std::make_unique<DmaFnpEvents>(output_dimensions,
-                                            std::move(output_events));
+      return make_unique_compat<DmaFnpEvents>(output_dimensions,
+                                              std::move(output_events));
     }
     case OutputFormat::HrcActivations: {
       // Read back data aligned on 32-bit words
       dma::wbuffer output_events(output_word_size);
       driver->read(read_offset_addr, output_events.data(), output_bytes_size);
       // We can directly wrap the output events in a DmaCnpEvents sparse tensor
-      return std::make_unique<DmaHrcEvents>(output_dimensions,
-                                            std::move(output_events));
+      return make_unique_compat<DmaHrcEvents>(output_dimensions,
+                                              std::move(output_events));
     }
     case OutputFormat::DenseActivations: {
       // determine actual byte size

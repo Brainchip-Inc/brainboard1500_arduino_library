@@ -11,6 +11,17 @@
 namespace akida {
 
 struct SpiFlashRuntimeConfig {
+  constexpr SpiFlashRuntimeConfig(uint8_t read_opcode_in = 0x6Bu,
+                                  uint8_t transfer_type_in = 0x0u,
+                                  uint8_t wait_cycles_in = 0x8u,
+                                  bool mode_bits_enabled_in = false,
+                                  uint8_t mode_bits_value_in = 0x00u)
+      : read_opcode(read_opcode_in),
+        transfer_type(transfer_type_in),
+        wait_cycles(wait_cycles_in),
+        mode_bits_enabled(mode_bits_enabled_in),
+        mode_bits_value(mode_bits_value_in) {}
+
   uint8_t read_opcode = 0x6Bu;
   uint8_t transfer_type = 0x0u;
   uint8_t wait_cycles = 0x8u;

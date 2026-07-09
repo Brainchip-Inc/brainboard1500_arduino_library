@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #include "akida/shape.h"
 #include "akida/sparse.h"
@@ -13,6 +14,11 @@
 namespace akida {
 
 using DenseBufferPtr = std::unique_ptr<Dense::Buffer>;
+
+template <typename T, typename... Args>
+static std::unique_ptr<T> make_unique_compat(Args&&... args) {
+  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
 
 class DenseOwnedBuffer final : public Dense::Buffer {
  private:
@@ -72,7 +78,7 @@ class DenseImpl : public Dense {
     // Evaluate element size
     auto elem_size = tensor_type_size(type_);
     // Allocate the tensor memory (zero-initialized)
-    bytes_ = std::make_unique<DenseOwnedBuffer>(size_ * elem_size);
+    bytes_ = make_unique_compat<DenseOwnedBuffer>(size_ * elem_size);
   }
 
   DenseImpl(const char* bytes, size_t bytes_size, TensorType type,
@@ -168,17 +174,17 @@ bool Dense::operator==(const Tensor& ref) const {
 
 DenseUniquePtr Dense::create(TensorType type, const Shape& dims,
                              Dense::Layout layout) {
-  return std::make_unique<DenseImpl>(type, dims, layout);
+  return make_unique_compat<DenseImpl>(type, dims, layout);
 }
 
 DenseUniquePtr Dense::copy(const char* array, size_t size, TensorType type,
                            const Shape& dims, Dense::Layout layout) {
-  return std::make_unique<DenseImpl>(array, size, type, dims, layout);
+  return make_unique_compat<DenseImpl>(array, size, type, dims, layout);
 }
 
 DenseUniquePtr Dense::from_sparse(const Sparse& sparse, Dense::Layout layout) {
   const auto& shape = sparse.dimensions();
-  auto dense = std::make_unique<DenseImpl>(sparse.type(), shape, layout);
+  auto dense = make_unique_compat<DenseImpl>(sparse.type(), shape, layout);
   size_t v_size = tensor_type_size(sparse.type());
   auto strides = dense->strides();
   // Iterate over the sparse coordinates and values
@@ -201,8 +207,8 @@ DenseUniquePtr Dense::create_view(const char* array, TensorType type,
   // Evaluate element size
   auto elem_size = tensor_type_size(type);
   auto size = shape_size(dims);
-  auto buffer = std::make_unique<DenseViewConstBuffer>(array, size * elem_size);
-  return std::make_unique<DenseImpl>(std::move(buffer), type, dims, layout);
+  auto buffer = make_unique_compat<DenseViewConstBuffer>(array, size * elem_size);
+  return make_unique_compat<DenseImpl>(std::move(buffer), type, dims, layout);
 }
 
 std::vector<uint32_t> Dense::eval_strides(const Shape& shape, Layout layout) {
