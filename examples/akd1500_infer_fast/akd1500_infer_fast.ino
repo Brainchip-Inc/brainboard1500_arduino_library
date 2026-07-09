@@ -61,12 +61,12 @@ constexpr uint32_t kFlashModelOffset = 0u;
 // Expose the Akida and bridge-flash SPI clocks as sketch-level knobs so the
 // demo can be tuned directly from the Arduino IDE without editing the library.
 constexpr uint32_t kAkidaSpiClockHz = 25000000u;
-constexpr uint32_t kFlashSpiClockHz = 12500000u;
+constexpr uint32_t kFlashSpiClockHz = 2000000u;
 constexpr uint8_t kInferenceResultSequence[4] = {0xAC, 0x1D, 0x1A, 0xDA};
 constexpr uint8_t kStartSequence[4] = {0xFA, 0xCE, 0xFE, 0xED};
 constexpr uint8_t kStopSequence[4] = {0xDA, 0xBB, 0xAD, 0x00};
 constexpr uint32_t kPreviewSessionHoldMs = 2000u;
-constexpr uint32_t kAkidaColdResetHoldMs = 10u;
+constexpr uint32_t kAkidaColdResetHoldMs = 250u;
 constexpr uint32_t kAkidaReloadSettleMs = 10u;
 constexpr uint8_t kAkidaWakeRetryLimit = 5u;
 constexpr uint32_t kBurstInferencesPerClap = 5u;
