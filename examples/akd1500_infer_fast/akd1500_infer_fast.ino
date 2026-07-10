@@ -1,5 +1,7 @@
 #include <Arduino.h>
 
+#if defined(ARDUINO_NICLA_VISION)
+
 #include <AKD1500.h>
 #include <PDM.h>
 
@@ -9,10 +11,6 @@
 #include "gc2145.h"
 #include "model_metadata.h"
 #include "program.h"
-
-#ifndef ARDUINO_NICLA_VISION
-#error "This example is intended for Nicla Vision."
-#endif
 
 #define BB15_FLASH_PROFILE_AUTO 0
 #define BB15_FLASH_PROFILE_RENESAS 1
@@ -1251,3 +1249,29 @@ void loop() {
 
   delay(kLoopDelayMs);
 }
+
+#else
+
+namespace {
+
+constexpr uint32_t kSerialBaud = 115200u;
+constexpr uint32_t kSerialWaitMs = 1500u;
+
+void wait_for_serial() {
+  const uint32_t start_ms = millis();
+  while (!Serial && (millis() - start_ms) < kSerialWaitMs) {
+  }
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(kSerialBaud);
+  wait_for_serial();
+  Serial.println(
+      "akd1500_infer_fast: runtime support requires Nicla Vision + BB15");
+}
+
+void loop() {}
+
+#endif

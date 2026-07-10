@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 
+#if AKD1500_PLATFORM_SUPPORTED
+
 #include "akida/dense.h"
 #include "akida/input_conversion.h"
 #include "akida/shape.h"
@@ -930,3 +932,322 @@ const char* AkidaNicla::statusName(AKD1500Status status) {
   }
   return "Unknown";
 }
+
+#else
+
+namespace {
+
+constexpr uint32_t kExternalModelAliasBase = 0x80000000u;
+constexpr uint32_t kExternalModelWindowBase = 0xFC000000u;
+constexpr uint32_t kExternalModelWindowSize = 0x00800000u;
+constexpr const char* kUnsupportedPlatformMessage =
+    "unsupported_platform_requires_nicla_vision";
+
+AKD1500Error make_error(AKD1500Status status, const char* message,
+                        uint32_t detail = 0u) {
+  AKD1500Error error;
+  error.status = status;
+  error.detail = detail;
+  error.message = message;
+  return error;
+}
+
+AKD1500RunResult make_failed_result(const AKD1500Error& error) {
+  AKD1500RunResult result;
+  result.status = error.status;
+  result.error = error;
+  return result;
+}
+
+uint32_t normalize_external_model_address(uint32_t address_or_offset) {
+  if (address_or_offset >= kExternalModelAliasBase &&
+      address_or_offset < (kExternalModelAliasBase + kExternalModelWindowSize)) {
+    return address_or_offset;
+  }
+
+  if (address_or_offset >= kExternalModelWindowBase &&
+      address_or_offset <
+          (kExternalModelWindowBase + kExternalModelWindowSize)) {
+    return kExternalModelAliasBase +
+           (address_or_offset - kExternalModelWindowBase);
+  }
+
+  if (address_or_offset < kExternalModelWindowSize) {
+    return kExternalModelAliasBase + address_or_offset;
+  }
+
+  return address_or_offset;
+}
+
+}  // namespace
+
+AKD1500Options AKD1500Options::niclaVisionDefaults() {
+  AKD1500Options options;
+  options.akidaCsPin = 7u;
+  options.bridgeCsPin = 1u;
+  options.spiClockHz = 8000000u;
+  options.flashSpiClockHz = 2000000u;
+  options.externalModelAddress = kExternalModelAliasBase;
+  options.postBeginSettleMs = 50u;
+  options.postLinkSettleMs = 50u;
+  options.fetchPollDelayMs = 1u;
+  return options;
+}
+
+size_t AKD1500RunResult::elementCount() const {
+  return akida::shape_size(dimensions);
+}
+
+AKD1500RunnerBase::AKD1500RunnerBase(const AKD1500Options& options)
+    : options_(options) {
+  last_error_ = make_error(AKD1500Status::Ok, "ok");
+}
+
+void AKD1500RunnerBase::dumpFetchTimeoutState(uint32_t, uint32_t) {}
+
+void AKD1500RunnerBase::clearLoadedModel() {
+  model_loaded_ = false;
+  model_info_ = {};
+}
+
+AKD1500Status AKD1500RunnerBase::setError(AKD1500Status status,
+                                          const char* message,
+                                          uint32_t detail) {
+  last_error_ = make_error(status, message, detail);
+  return status;
+}
+
+AKD1500Status AKD1500RunnerBase::beginRunner() {
+  clearLoadedModel();
+  ip_version_ = 0u;
+  return setError(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage);
+}
+
+AKD1500RunResult AKD1500RunnerBase::runImpl(const void*, akida::TensorType,
+                                            const akida::Shape&) {
+  return make_failed_result(
+      make_error(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage));
+}
+
+AKD1500HostRunner::AKD1500HostRunner(const AKD1500Options& options)
+    : AKD1500RunnerBase(options) {}
+
+AKD1500Status AKD1500HostRunner::begin() { return beginRunner(); }
+
+AKD1500Status AKD1500HostRunner::loadModel(const uint8_t*, size_t) {
+  clearLoadedModel();
+  return setError(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage);
+}
+
+AKD1500RunResult AKD1500HostRunner::run(const void* input_data,
+                                        akida::TensorType input_type,
+                                        const akida::Shape& input_dimensions) {
+  return runImpl(input_data, input_type, input_dimensions);
+}
+
+AKD1500RunResult AKD1500HostRunner::run(
+    const uint8_t* input_data, const akida::Shape& input_dimensions) {
+  return runImpl(input_data, input_dimensions);
+}
+
+AKD1500FlashRunner::AKD1500FlashRunner(const AKD1500Options& options)
+    : AKD1500RunnerBase(options) {}
+
+AKD1500Status AKD1500FlashRunner::begin() { return beginRunner(); }
+
+AKD1500Status AKD1500FlashRunner::loadExternalModel(const uint8_t*, size_t) {
+  clearLoadedModel();
+  return setError(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage);
+}
+
+AKD1500RunResult AKD1500FlashRunner::run(const void* input_data,
+                                         akida::TensorType input_type,
+                                         const akida::Shape& input_dimensions) {
+  return runImpl(input_data, input_type, input_dimensions);
+}
+
+AKD1500RunResult AKD1500FlashRunner::run(
+    const uint8_t* input_data, const akida::Shape& input_dimensions) {
+  return runImpl(input_data, input_dimensions);
+}
+
+AkidaNicla::AkidaNicla(const AKD1500Options& options) : options_(options) {
+  last_error_ = make_error(AKD1500Status::Ok, "ok");
+}
+
+AKD1500Status AkidaNicla::setError(AKD1500Status status, const char* message,
+                                   uint32_t detail) {
+  last_error_ = make_error(status, message, detail);
+  return status;
+}
+
+AKD1500Status AkidaNicla::begin() { return begin(options_); }
+
+AKD1500Status AkidaNicla::begin(const AKD1500Options& options) {
+  options_ = options;
+  host_runner_.reset();
+  flash_runner_.reset();
+  active_runner_ = ActiveRunner::None;
+  model_info_ = {};
+  ip_version_ = 0u;
+  return setError(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage);
+}
+
+AKD1500Status AkidaNicla::load(const AKD1500Model&) {
+  model_info_ = {};
+  active_runner_ = ActiveRunner::None;
+  return setError(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage);
+}
+
+AKD1500RunResult AkidaNicla::dispatchInfer(const AKD1500Input&) {
+  return make_failed_result(
+      make_error(AKD1500Status::LinkFailed, kUnsupportedPlatformMessage));
+}
+
+AKD1500RunResult AkidaNicla::infer(const AKD1500Input& input) {
+  return dispatchInfer(input);
+}
+
+AKD1500RunResult AkidaNicla::infer(
+    const void* input_data, akida::TensorType input_type,
+    const akida::Shape& input_dimensions) {
+  AKD1500Input input;
+  input.data = input_data;
+  input.type = input_type;
+  input.dimensions = input_dimensions;
+  return dispatchInfer(input);
+}
+
+AKD1500RunResult AkidaNicla::inferUint8(
+    const uint8_t* input_data, const akida::Shape& input_dimensions) {
+  return infer(input_data, akida::TensorType::uint8, input_dimensions);
+}
+
+AKD1500RunResult AkidaNicla::inferUint8(const uint8_t* input_data) {
+  return infer(input_data, akida::TensorType::uint8, model_info_.inputDimensions);
+}
+
+AKD1500ClassificationResult AkidaNicla::makeClassificationResult(
+    const AKD1500RunResult& run_result) const {
+  AKD1500ClassificationResult result;
+  result.status = run_result.status;
+  result.error = run_result.error;
+  result.predictedIndex = run_result.predictedIndex;
+  result.scores = run_result;
+  return result;
+}
+
+AKD1500ClassificationResult AkidaNicla::classify(const AKD1500Input& input) {
+  return makeClassificationResult(infer(input));
+}
+
+AKD1500ClassificationResult AkidaNicla::classify(
+    const void* input_data, akida::TensorType input_type,
+    const akida::Shape& input_dimensions) {
+  return makeClassificationResult(
+      infer(input_data, input_type, input_dimensions));
+}
+
+AKD1500ClassificationResult AkidaNicla::classifyUint8(
+    const uint8_t* input_data, const akida::Shape& input_dimensions) {
+  return makeClassificationResult(inferUint8(input_data, input_dimensions));
+}
+
+AKD1500ClassificationResult AkidaNicla::classifyUint8(
+    const uint8_t* input_data) {
+  return makeClassificationResult(inferUint8(input_data));
+}
+
+void AkidaNicla::printLastError(Print& out) const {
+  out.print("status=");
+  out.print(statusName(last_error_.status));
+  out.print(" (");
+  out.print(static_cast<int>(last_error_.status));
+  out.print(")");
+  out.print(" detail=");
+  out.print(last_error_.detail);
+  out.print(" reason=");
+  out.println(last_error_.message);
+}
+
+void AkidaNicla::printModelInfo(Print& out) const {
+  out.print("valid=");
+  out.print(model_info_.valid ? "yes" : "no");
+  out.print(" input_dense=");
+  out.print(model_info_.inputIsDense ? "yes" : "no");
+  out.print(" output_dense=");
+  out.print(model_info_.outputIsDense ? "yes" : "no");
+  out.print(" input_shape=[");
+  for (size_t i = 0; i < model_info_.inputDimensions.size(); ++i) {
+    if (i != 0u) {
+      out.print(", ");
+    }
+    out.print(model_info_.inputDimensions[i]);
+  }
+  out.print("] output_shape=[");
+  for (size_t i = 0; i < model_info_.outputDimensions.size(); ++i) {
+    if (i != 0u) {
+      out.print(", ");
+    }
+    out.print(model_info_.outputDimensions[i]);
+  }
+  out.println("]");
+}
+
+uint32_t AkidaNicla::normalizeExternalModelAddress(uint32_t address_or_offset) {
+  return normalize_external_model_address(address_or_offset);
+}
+
+uint32_t AkidaNicla::externalModelAddressFromOffset(uint32_t offset) {
+  return normalize_external_model_address(offset);
+}
+
+bool AkidaNicla::stageModelToFlash(const uint8_t*, size_t, uint32_t) {
+  return false;
+}
+
+bool AkidaNicla::stageModelToFlash(const AKD1500Options&, const uint8_t*, size_t,
+                                   uint32_t) {
+  return false;
+}
+
+bool AkidaNicla::verifyModelInFlash(const uint8_t*, size_t, uint32_t) {
+  return false;
+}
+
+bool AkidaNicla::verifyModelInFlash(const AKD1500Options&, const uint8_t*, size_t,
+                                    uint32_t) {
+  return false;
+}
+
+bool AkidaNicla::inputMatchesModel(const akida::Shape& input_dimensions) const {
+  return model_info_.valid && input_dimensions == model_info_.inputDimensions;
+}
+
+const char* AkidaNicla::statusName(AKD1500Status status) {
+  switch (status) {
+    case AKD1500Status::Ok:
+      return "Ok";
+    case AKD1500Status::NotInitialized:
+      return "NotInitialized";
+    case AKD1500Status::LinkFailed:
+      return "LinkFailed";
+    case AKD1500Status::ProgramInfoInvalid:
+      return "ProgramInfoInvalid";
+    case AKD1500Status::ProgramFailed:
+      return "ProgramFailed";
+    case AKD1500Status::ModelNotLoaded:
+      return "ModelNotLoaded";
+    case AKD1500Status::InvalidInput:
+      return "InvalidInput";
+    case AKD1500Status::EnqueueFailed:
+      return "EnqueueFailed";
+    case AKD1500Status::FetchTimeout:
+      return "FetchTimeout";
+    case AKD1500Status::OutputFormatMismatch:
+      return "OutputFormatMismatch";
+  }
+  return "Unknown";
+}
+
+#endif

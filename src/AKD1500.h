@@ -1,16 +1,63 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
 #include <vector>
 
 #include <SPI.h>
 
+#if defined(ARDUINO_NICLA_VISION)
+#define AKD1500_PLATFORM_SUPPORTED 1
+#else
+#define AKD1500_PLATFORM_SUPPORTED 0
+#endif
+
+#if AKD1500_PLATFORM_SUPPORTED
+
 #include "akida/hardware_device.h"
 #include "akida/program_info.h"
 #include "akida/tensor.h"
 #include "akida_port/nicla_voice_akd1500_board.h"
+
+#else
+
+namespace akida {
+
+enum class TensorType {
+  bit = 0,
+  int2,
+  int4,
+  int8,
+  uint2,
+  uint4,
+  uint8,
+  int32,
+  float32,
+};
+
+using Shape = std::vector<uint32_t>;
+
+inline size_t shape_size(const Shape& shape) {
+  if (shape.empty()) {
+    return 0u;
+  }
+
+  size_t elements = 1u;
+  for (uint32_t dimension : shape) {
+    elements *= static_cast<size_t>(dimension);
+  }
+  return elements;
+}
+
+struct SpiFlashRuntimeConfig {
+  uint8_t reserved = 0u;
+};
+
+}  // namespace akida
+
+#endif
 
 class Print;
 
@@ -72,6 +119,8 @@ struct AKD1500RunResult {
   }
 };
 
+#if AKD1500_PLATFORM_SUPPORTED
+
 class AKD1500RunnerBase {
  public:
   const AKD1500Options& options() const { return options_; }
@@ -118,6 +167,54 @@ class AKD1500RunnerBase {
   uint32_t ip_version_ = 0u;
   bool model_loaded_ = false;
 };
+
+#else
+
+class AKD1500RunnerBase {
+ public:
+  const AKD1500Options& options() const { return options_; }
+  const AKD1500Error& lastError() const { return last_error_; }
+  uint32_t ipVersion() const { return ip_version_; }
+  bool modelLoaded() const { return model_loaded_; }
+  uint32_t detectedFlashJedec() const { return 0u; }
+  const char* detectedFlashName() const { return "unsupported"; }
+  akida::SpiFlashRuntimeConfig detectedFlashRuntimeConfig() const { return {}; }
+  bool hasSupportedFlashProfile() const { return false; }
+  akida::Shape inputDimensions() const { return model_info_.inputDimensions; }
+  akida::Shape outputDimensions() const { return model_info_.outputDimensions; }
+  bool inputIsDense() const { return model_info_.inputIsDense; }
+  bool outputIsDense() const { return model_info_.outputIsDense; }
+  bool canLearn() const { return model_info_.canLearn; }
+
+ protected:
+  explicit AKD1500RunnerBase(const AKD1500Options& options);
+
+  AKD1500Status beginRunner();
+  AKD1500RunResult runImpl(const void* input_data, akida::TensorType input_type,
+                           const akida::Shape& input_dimensions);
+  AKD1500RunResult runImpl(const uint8_t* input_data,
+                           const akida::Shape& input_dimensions) {
+    return runImpl(input_data, akida::TensorType::uint8, input_dimensions);
+  }
+  void dumpFetchTimeoutState(uint32_t fetch_polls, uint32_t elapsed_us);
+  void clearLoadedModel();
+  AKD1500Status setError(AKD1500Status status, const char* message,
+                         uint32_t detail = 0u);
+
+  AKD1500Options options_;
+  AKD1500Error last_error_ = {};
+  uint32_t ip_version_ = 0u;
+  bool model_loaded_ = false;
+  struct StubModelInfo {
+    bool inputIsDense = true;
+    bool outputIsDense = true;
+    bool canLearn = false;
+    akida::Shape inputDimensions = {};
+    akida::Shape outputDimensions = {};
+  } model_info_;
+};
+
+#endif
 
 class AKD1500HostRunner final : public AKD1500RunnerBase {
  public:

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstring>
-#include <cstdint>
+#include <stdint.h>
 #include <memory>
 
 #include <AKD1500.h>
