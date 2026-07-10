@@ -66,11 +66,9 @@ static inline void dump_spim_snapshot(akida::HardwareDriver& driver,
       static_cast<unsigned long>(driver.read32(kSpiMXipIncrInst)));
 }
 constexpr uint32_t kCtrlEnSpiS2mMask = (1u << 16);
-// The original 250 ms guard band is far larger than the observed settle time
-// needed on the Nicla Vision + BB15 path and dominates cold-start latency.
-// Keep a conservative non-zero pause while removing the extra ~1 s of startup
-// overhead paid across repeated S2M enter/leave transitions.
-constexpr uint32_t kS2mPhaseGapMs = 25u;
+// Revert to the original conservative guard band. The shortened 25 ms pause
+// regressed bridge-flash bring-up on real Nicla Vision + BB15 hardware.
+constexpr uint32_t kS2mPhaseGapMs = 250u;
 constexpr uint8_t kFlashCmdResetEnable = 0x66u;
 constexpr uint8_t kFlashCmdResetMemory = 0x99u;
 constexpr uint8_t kFlashCmdReleasePowerDown = 0xABu;
@@ -607,7 +605,7 @@ bool flash_bridge_reset_preamble(ArduinoSpiDriver& spi_driver,
   if (!flash_bridge_cmd1(spi_driver, bridge_cs_pin, kFlashCmdResetMemory)) {
     return false;
   }
-  delay(5);
+  delay(20);
   return true;
 }
 
@@ -767,11 +765,7 @@ bool apply_flash_profile(akida::Akd1500SpiDriver& driver,
   }
 
   bool ok = true;
-  ok &= flash_bridge_cmd1(spi_driver, bridge_cs_pin, kFlashCmdReleasePowerDown);
-  delayMicroseconds(10);
-  ok &= flash_bridge_cmd1(spi_driver, bridge_cs_pin, kFlashCmdResetEnable);
-  ok &= flash_bridge_cmd1(spi_driver, bridge_cs_pin, kFlashCmdResetMemory);
-  delay(1);
+  ok &= flash_bridge_reset_preamble(spi_driver, bridge_cs_pin);
 
   uint8_t manufacturer_id = 0u;
   uint8_t memory_type = 0u;
@@ -1087,17 +1081,16 @@ bool AKD1500Board::ensure_spi_flash_runtime_profile() {
     restore_spi_clock();
     return false;
   }
-  bool ok = flash_bridge_cmd1(spi_driver_, config_.pins.bridge_cs,
-                              kFlashCmdReleasePowerDown);
-  delayMicroseconds(10);
-  ok &= flash_bridge_cmd1(spi_driver_, config_.pins.bridge_cs,
-                          kFlashCmdResetEnable);
-  ok &= flash_bridge_cmd1(spi_driver_, config_.pins.bridge_cs,
-                          kFlashCmdResetMemory);
-  delay(1);
+  bool ok = flash_bridge_reset_preamble(spi_driver_, config_.pins.bridge_cs);
   uint8_t manufacturer_id = 0u;
   uint8_t memory_type = 0u;
   uint8_t capacity_id = 0u;
+  uint8_t status1 = 0u;
+  uint8_t status2 = 0u;
+  if (ok) {
+    status1 = flash_bridge_read_status(spi_driver_, config_.pins.bridge_cs);
+    status2 = flash_bridge_read_status2(spi_driver_, config_.pins.bridge_cs);
+  }
   ok &= read_flash_jedec(spi_driver_, config_.pins.bridge_cs, &manufacturer_id,
                          &memory_type, &capacity_id);
   s2m_leave(*akida_driver_, spi_driver_, config_.pins.bridge_cs, ctrl_before);
@@ -1161,11 +1154,13 @@ bool AKD1500Board::ensure_spi_flash_runtime_profile() {
 
   akida_driver_->reinit_spi_flash_runtime();
   AKD1500_LIBRARY_LOG(
-      "[AKD1500][s2m] flash profile selected mode=%s name=%s jedec=%02X:%02X:%02X capacity=0x%08lX read=0x%02X trans=%u wait=%u mode_en=%u mode=0x%02X\r\n",
+      "[AKD1500][s2m] flash profile selected mode=%s name=%s jedec=%02X:%02X:%02X sr1=0x%02X sr2=0x%02X capacity=0x%08lX read=0x%02X trans=%u wait=%u mode_en=%u mode=0x%02X\r\n",
       forced_profile ? "forced" : "auto", profile->name,
       static_cast<unsigned>(manufacturer_id),
       static_cast<unsigned>(memory_type),
       static_cast<unsigned>(capacity_id),
+      static_cast<unsigned>(status1),
+      static_cast<unsigned>(status2),
       static_cast<unsigned long>(profile->capacity_bytes),
       static_cast<unsigned>(profile->runtime_config.read_opcode),
       static_cast<unsigned>(profile->runtime_config.transfer_type),

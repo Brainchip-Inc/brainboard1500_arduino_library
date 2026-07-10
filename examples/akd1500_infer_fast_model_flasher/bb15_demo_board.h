@@ -30,11 +30,12 @@ class PioExpander6408 {
   }
 
   bool configureBb15DefaultOutputs() {
-    return writeRegister(kRegOutputState, 0x00u) &&
+    // Match the known-good bitbang link-check expander sequence so both
+    // sketches start from the same board-control state before strap changes.
+    return writeRegister(kRegOutputState, 0x01u) &&
            writeRegister(kRegDirection, 0xFFu) &&
            writeRegister(kRegOutputHighZ, 0x00u) &&
-           writeRegister(kRegOutputState, 0x02u) &&
-           writeRegister(0x11u, 0xFFu);
+           writeRegister(kRegInterruptMask, 0xFFu);
   }
 
   bool pinMode(uint8_t pin, PinMode mode) {
@@ -89,6 +90,7 @@ class PioExpander6408 {
   static constexpr uint8_t kRegDirection = 0x03u;
   static constexpr uint8_t kRegOutputState = 0x05u;
   static constexpr uint8_t kRegOutputHighZ = 0x07u;
+  static constexpr uint8_t kRegInterruptMask = 0x11u;
 
   static uint8_t pinMask(uint8_t pin) {
     return (pin < 8u) ? static_cast<uint8_t>(1u << pin) : 0u;
@@ -183,7 +185,7 @@ class Bb15NiclaVisionBoard {
  private:
   static constexpr uint32_t kI2cClockHz = 100000u;
   static constexpr uint32_t kAkidaResetAssertMs = 5u;
-  static constexpr uint32_t kAkidaResetReleaseSettleMs = 10u;
+  static constexpr uint32_t kAkidaResetReleaseSettleMs = 50u;
   static constexpr PinName kProceedGpioPin = PA_10;
   static constexpr uint8_t kAkidaResetPin = 3u;
 

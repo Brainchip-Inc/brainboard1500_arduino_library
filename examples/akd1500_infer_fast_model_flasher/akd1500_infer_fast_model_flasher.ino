@@ -10,6 +10,13 @@
 #error "This example is intended for Nicla Vision."
 #endif
 
+#define BB15_FLASH_PROFILE_AUTO 0
+#define BB15_FLASH_PROFILE_RENESAS 1
+
+#ifndef BB15_FLASH_PROFILE_KNOWN
+#define BB15_FLASH_PROFILE_KNOWN BB15_FLASH_PROFILE_AUTO
+#endif
+
 namespace {
 
 constexpr uint32_t kSerialBaud = 115200u;
@@ -94,6 +101,10 @@ AKD1500Options make_options() {
   options.flashSpiClockHz = kFlashSpiClockHz;
   options.externalModelAddress =
       AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset);
+#if BB15_FLASH_PROFILE_KNOWN == BB15_FLASH_PROFILE_RENESAS
+  options.forcedFlashProfile = "renesas";
+  options.assumeForcedFlashProfileReady = true;
+#endif
   return options;
 }
 
@@ -137,7 +148,13 @@ void print_spi_configuration(const AKD1500Options& options) {
   Serial.print(" spi akida_hz=");
   Serial.print(static_cast<unsigned long>(options.spiClockHz));
   Serial.print(" flash_hz=");
-  Serial.println(static_cast<unsigned long>(options.flashSpiClockHz));
+  Serial.print(static_cast<unsigned long>(options.flashSpiClockHz));
+  Serial.print(" flash_profile=");
+#if BB15_FLASH_PROFILE_KNOWN == BB15_FLASH_PROFILE_RENESAS
+  Serial.println("renesas");
+#else
+  Serial.println("auto");
+#endif
 }
 
 bool flash_and_verify_model() {
