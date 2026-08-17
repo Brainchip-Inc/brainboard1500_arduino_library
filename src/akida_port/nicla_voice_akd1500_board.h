@@ -77,6 +77,9 @@ class AKD1500Board {
   void dump_spi_master_state(const char* prefix = "[AKD1500][spim]");
   void dump_runtime_state(const char* prefix = "[AKD1500][state]");
   bool reinit_spi_flash_runtime();
+  bool enter_s2m();
+  bool leave_s2m();
+  bool s2m_active() const { return s2m_active_; }
   bool read_bridge_flash(uint32_t flash_offset, uint8_t* data, size_t size);
   bool stage_program_data_to_bridge_flash(const uint8_t* serialized_program,
                                           size_t serialized_program_size,
@@ -105,6 +108,9 @@ class AKD1500Board {
   akida::SpiFlashRuntimeConfig detected_flash_runtime_config_{};
   bool detected_flash_profile_attempted_ = false;
   bool detected_flash_profile_supported_ = false;
+  bool s2m_active_ = false;
+  uint32_t s2m_ctrl_before_ = 0u;
+  uint32_t s2m_original_spi_clock_hz_ = 0u;
 
   void ensure_started();
 };

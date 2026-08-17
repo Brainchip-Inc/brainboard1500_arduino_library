@@ -8,7 +8,18 @@
 
 #include <SPI.h>
 
-#if defined(ARDUINO_NICLA_VISION)
+// Low-level AKD1500 transport logs are disabled by default.
+//
+// The public examples should show concise board/model progress unless a user is
+// actively debugging the runtime itself. Developers can re-enable the detailed
+// `[AKD1500][...]` trace stream by defining `AKD1500_LIBRARY_ENABLE_LOGS=1`
+// before building the library.
+#ifndef AKD1500_LIBRARY_ENABLE_LOGS
+#define AKD1500_LIBRARY_ENABLE_LOGS 0
+#endif
+
+#if defined(ARDUINO_NICLA_VISION) || defined(ARDUINO_NICLA) || \
+    defined(ARDUINO_ARCH_SAMD)
 #define AKD1500_PLATFORM_SUPPORTED 1
 #else
 #define AKD1500_PLATFORM_SUPPORTED 0
@@ -24,6 +35,10 @@
 #else
 
 namespace akida {
+
+class HardwareDevice;
+class HardwareDriver;
+class ProgramInfo;
 
 enum class TensorType {
   bit = 0,
@@ -135,6 +150,13 @@ class AKD1500RunnerBase {
   bool hasSupportedFlashProfile() const {
     return board_.has_supported_flash_profile();
   }
+  akida::HardwareDevice* hardwareDevice() const { return device_.get(); }
+  akida::HardwareDriver* hardwareDriver() const {
+    return device_ != nullptr
+               ? &const_cast<akida_port::AKD1500Board&>(board_).hardware_driver()
+               : nullptr;
+  }
+  const akida::ProgramInfo& programInfo() const { return program_info_; }
   akida::Shape inputDimensions() const;
   akida::Shape outputDimensions() const;
   bool inputIsDense() const;
@@ -180,6 +202,9 @@ class AKD1500RunnerBase {
   const char* detectedFlashName() const { return "unsupported"; }
   akida::SpiFlashRuntimeConfig detectedFlashRuntimeConfig() const { return {}; }
   bool hasSupportedFlashProfile() const { return false; }
+  akida::HardwareDevice* hardwareDevice() const { return nullptr; }
+  akida::HardwareDriver* hardwareDriver() const { return nullptr; }
+  const akida::ProgramInfo* programInfo() const { return nullptr; }
   akida::Shape inputDimensions() const { return model_info_.inputDimensions; }
   akida::Shape outputDimensions() const { return model_info_.outputDimensions; }
   bool inputIsDense() const { return model_info_.inputIsDense; }
@@ -315,6 +340,9 @@ class AkidaNicla final {
   uint32_t ipVersion() const { return ip_version_; }
   bool modelLoaded() const { return model_info_.valid; }
   AKD1500ModelInfo modelInfo() const { return model_info_; }
+  akida::HardwareDevice* hardwareDevice() const;
+  akida::HardwareDriver* hardwareDriver() const;
+  const akida::ProgramInfo* programInfo() const;
 
   void printLastError(Print& out) const;
   void printModelInfo(Print& out) const;
@@ -344,6 +372,7 @@ class AkidaNicla final {
     Flash
   };
 
+  AKD1500RunnerBase* activeRunnerBase() const;
   AKD1500Status setError(AKD1500Status status, const char* message,
                          uint32_t detail = 0u);
   AKD1500RunResult dispatchInfer(const AKD1500Input& input);

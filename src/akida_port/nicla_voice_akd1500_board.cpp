@@ -20,10 +20,6 @@
 
 namespace akida_port {
 
-#ifndef AKD1500_LIBRARY_ENABLE_LOGS
-#define AKD1500_LIBRARY_ENABLE_LOGS 0
-#endif
-
 #if AKD1500_LIBRARY_ENABLE_LOGS
 #define AKD1500_LIBRARY_LOG(...) std::printf(__VA_ARGS__)
 #else
@@ -483,6 +479,15 @@ bool bridge_transfer(ArduinoSpiDriver& spi_driver, uint8_t bridge_cs_pin,
   spi_driver.transfer(tx, rx, size);
   digitalWrite(bridge_cs_pin, HIGH);
   return true;
+}
+
+void log_bridge_cs_level(const char* where, uint8_t bridge_cs_pin) {
+  pinMode(bridge_cs_pin, OUTPUT);
+  const int level = digitalRead(bridge_cs_pin);
+  AKD1500_LIBRARY_LOG(
+      "[AKD1500][flash] bridge_cs where=%s pin=%u level=%s\r\n",
+      where ? where : "unknown", static_cast<unsigned>(bridge_cs_pin),
+      (level == LOW) ? "LOW" : "HIGH");
 }
 
 bool read_flash_jedec(ArduinoSpiDriver& spi_driver, uint8_t bridge_cs_pin,
@@ -1251,8 +1256,72 @@ bool AKD1500Board::reinit_spi_flash_runtime() {
   return ensure_spi_flash_runtime_profile();
 }
 
+bool AKD1500Board::enter_s2m() {
+  ensure_started();
+  if (s2m_active_) {
+    return true;
+  }
+
+  pinMode(config_.pins.bridge_cs, OUTPUT);
+  digitalWrite(config_.pins.bridge_cs, HIGH);
+  delayMicroseconds(5);
+
+  s2m_original_spi_clock_hz_ = spi_driver_.clock_hz();
+  const uint32_t flash_spi_clock_hz =
+      (config_.flash_spi_clock_hz != 0u) ? config_.flash_spi_clock_hz
+                                         : s2m_original_spi_clock_hz_;
+  spi_driver_.set_clock_hz(flash_spi_clock_hz);
+
+  if (!s2m_enter(*akida_driver_, &s2m_ctrl_before_)) {
+    spi_driver_.set_clock_hz(s2m_original_spi_clock_hz_);
+    return false;
+  }
+
+  s2m_active_ = true;
+  return true;
+}
+
+bool AKD1500Board::leave_s2m() {
+  ensure_started();
+  if (!s2m_active_) {
+    return true;
+  }
+
+  s2m_leave(*akida_driver_, spi_driver_, config_.pins.bridge_cs,
+            s2m_ctrl_before_);
+  spi_driver_.set_clock_hz(s2m_original_spi_clock_hz_);
+  s2m_active_ = false;
+
+  return ensure_spi_flash_runtime_profile();
+}
+
 bool AKD1500Board::read_bridge_flash(uint32_t flash_offset, uint8_t* data,
                                      size_t size) {
+  if (s2m_active_) {
+    if (data == nullptr || size == 0u) {
+      return false;
+    }
+    if (!flash_bridge_reset_preamble(spi_driver_, config_.pins.bridge_cs)) {
+      return false;
+    }
+
+    size_t remaining = size;
+    uint32_t address = flash_offset;
+    uint8_t* cursor = data;
+    while (remaining > 0u) {
+      const size_t chunk_size =
+          std::min(remaining, static_cast<size_t>(kFlashVerifyChunkSize));
+      if (!flash_bridge_read_data(spi_driver_, config_.pins.bridge_cs, address,
+                                  cursor, chunk_size)) {
+        return false;
+      }
+      cursor += chunk_size;
+      address += static_cast<uint32_t>(chunk_size);
+      remaining -= chunk_size;
+    }
+    return true;
+  }
+
   return read_flash_bytes(flash_offset, data, size);
 }
 
@@ -1291,6 +1360,11 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
       static_cast<unsigned long>(external_program_data_address),
       static_cast<unsigned long>(flash_offset));
 
+  pinMode(config_.pins.bridge_cs, OUTPUT);
+  digitalWrite(config_.pins.bridge_cs, HIGH);
+  delayMicroseconds(5);
+  log_bridge_cs_level("pre_stage_idle", config_.pins.bridge_cs);
+
   uint32_t ctrl_before = 0u;
   if (!s2m_enter(*akida_driver_, &ctrl_before)) {
     AKD1500_LIBRARY_LOG("[AKD1500][flash] stage failed: s2m enter\r\n");
@@ -1298,6 +1372,31 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
   }
 
   bool ok = flash_bridge_reset_preamble(spi_driver_, config_.pins.bridge_cs);
+  uint8_t manufacturer_id = 0u;
+  uint8_t memory_type = 0u;
+  uint8_t capacity_id = 0u;
+  uint8_t status1 = 0xFFu;
+  uint8_t status2 = 0xFFu;
+  if (ok) {
+    status1 = flash_bridge_read_status(spi_driver_, config_.pins.bridge_cs);
+    status2 = flash_bridge_read_status2(spi_driver_, config_.pins.bridge_cs);
+    ok = read_flash_jedec(spi_driver_, config_.pins.bridge_cs, &manufacturer_id,
+                          &memory_type, &capacity_id);
+    if (ok) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] bridge jedec=%02X:%02X:%02X sr1=0x%02X sr2=0x%02X\r\n",
+          static_cast<unsigned>(manufacturer_id),
+          static_cast<unsigned>(memory_type),
+          static_cast<unsigned>(capacity_id),
+          static_cast<unsigned>(status1),
+          static_cast<unsigned>(status2));
+    } else {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] stage failed: jedec read sr1=0x%02X sr2=0x%02X\r\n",
+          static_cast<unsigned>(status1),
+          static_cast<unsigned>(status2));
+    }
+  }
 
   const uint32_t erase_start =
       static_cast<uint32_t>(flash_offset) & ~(kFlashSectorSize - 1u);
@@ -1310,6 +1409,11 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
   for (uint32_t addr = erase_start; ok && addr < erase_end;
        addr += kFlashSectorSize) {
     ok = flash_bridge_sector_erase(spi_driver_, config_.pins.bridge_cs, addr);
+    if (!ok) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] stage failed: sector erase addr=0x%08lX\r\n",
+          static_cast<unsigned long>(addr));
+    }
   }
 
   for (size_t offset = 0u; ok && offset < program_data_size;
@@ -1321,6 +1425,12 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
     ok = flash_bridge_page_program(spi_driver_, config_.pins.bridge_cs,
                                    chunk_addr, program_data + offset,
                                    chunk_size);
+    if (!ok) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] stage failed: page program addr=0x%08lX size=%lu\r\n",
+          static_cast<unsigned long>(chunk_addr),
+          static_cast<unsigned long>(chunk_size));
+    }
   }
 
   std::array<uint8_t, kFlashVerifyChunkSize> verify{};
@@ -1333,8 +1443,20 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
     verify.fill(0u);
     ok = flash_bridge_read_data(spi_driver_, config_.pins.bridge_cs, chunk_addr,
                                 verify.data(), chunk_size);
+    if (!ok) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] stage failed: verify read addr=0x%08lX size=%lu\r\n",
+          static_cast<unsigned long>(chunk_addr),
+          static_cast<unsigned long>(chunk_size));
+    }
     if (ok &&
         std::memcmp(program_data + offset, verify.data(), chunk_size) != 0) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] stage failed: verify mismatch addr=0x%08lX size=%lu expected=%02X actual=%02X\r\n",
+          static_cast<unsigned long>(chunk_addr),
+          static_cast<unsigned long>(chunk_size),
+          static_cast<unsigned>(program_data[offset]),
+          static_cast<unsigned>(verify[0]));
       ok = false;
     }
   }

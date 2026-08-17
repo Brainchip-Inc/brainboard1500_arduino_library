@@ -220,6 +220,37 @@ bool shapes_equal(const akida::Shape& lhs, const akida::Shape& rhs) {
 
 }  // namespace
 
+AKD1500RunnerBase* AkidaNicla::activeRunnerBase() const {
+#if AKD1500_PLATFORM_SUPPORTED
+  if (active_runner_ == ActiveRunner::Flash && flash_runner_) {
+    return flash_runner_.get();
+  }
+  if (active_runner_ == ActiveRunner::Host && host_runner_) {
+    return host_runner_.get();
+  }
+#endif
+  return nullptr;
+}
+
+akida::HardwareDevice* AkidaNicla::hardwareDevice() const {
+  AKD1500RunnerBase* runner = activeRunnerBase();
+  return runner != nullptr ? runner->hardwareDevice() : nullptr;
+}
+
+akida::HardwareDriver* AkidaNicla::hardwareDriver() const {
+  AKD1500RunnerBase* runner = activeRunnerBase();
+  return runner != nullptr ? runner->hardwareDriver() : nullptr;
+}
+
+const akida::ProgramInfo* AkidaNicla::programInfo() const {
+#if AKD1500_PLATFORM_SUPPORTED
+  AKD1500RunnerBase* runner = activeRunnerBase();
+  return runner != nullptr ? &runner->programInfo() : nullptr;
+#else
+  return nullptr;
+#endif
+}
+
 AKD1500Options AKD1500Options::niclaVisionDefaults() {
   AKD1500Options options;
   options.akidaCsPin = 7u;

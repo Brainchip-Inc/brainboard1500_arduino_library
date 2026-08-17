@@ -1,233 +1,116 @@
-# BrainBoard15 Arduino Library
+# BB15 Arduino Library
 
-Arduino library for running an AKD1500 on a Nicla Vision with the BB15 wiring
-used by the bundled examples. The public flow is intentionally small:
+`BB15` is the board-centric Arduino library for BrainBoard15.
 
-- flash the bundled human-classifier model into BB15 external flash
-- run the camera classification demo
-- optionally open the live preview tool
+The public API is centered on the physical BB15 board rather than the older
+`AKD1500`-named surface:
 
-## Supported Hardware
+- `BB15` handles board bring-up, reset routing, expander access, flash access,
+  and transport state.
+- `BB15Model` describes a serialized Akida model and where it lives.
+- `BB15Runner` loads models and runs inference.
 
-- Arduino Nicla Vision
-- BrainBoard15 / BB15 wiring used by the included examples
-- AKD1500 external-flash execution path
+The constructor requires a `BB15Pinout`, so host-board wiring is always
+explicit:
 
-Example wiring assumed by the shipped sketches:
+```cpp
+#include <BB15.h>
 
-- `BB15 proceed / board-level enable`: `D2` (same Nicla Vision pin; required and driven high during bring-up)
-- `AKD` chip select: `D7`
-- bridge / flash chip select: `D1`
-- `AKD1500 RESET_N`: `D3` (required; software drives this line during bring-up)
-- SPI `COPI`: `D8`
-- SPI `CIPO`: `D10`
-- SPI `SCK`: `D9`
-- BB15 expander: `I2C 0x43` on `Wire` (`SDA=D11`, `SCL=D12`)
+BB15Pinout pinout = BB15Pinout::niclaSenseMeDefaults();
+BB15Config config = BB15Config::niclaVisionDefaults();
 
-## Wiring Notes
-
-The shipped examples actively drive two different classes of control lines
-during board bring-up:
-
-- board-level proceed / enable line: `D2`, driven high
-- device-level AKD reset line: `D3`, driven as `AKD1500 RESET_N`
-
-The software sequence used by both examples is:
-
-1. drive `D2` high so the BB15 board is in the expected proceed /
-   enabled state
-2. configure the BB15 expander on `0x43`
-3. assert `AKD1500 RESET_N` low on `D3`
-4. strap the AKD1500 boot mode through the expander (`P0` low for the
-   external-flash execution path)
-5. release `AKD1500 RESET_N` high on `D3`
-6. link to the AKD1500 and continue with flash/model operations
-
-That means the `D2 / PA_10` board-level control connection and the
-`D3 -> AKD1500 RESET_N` connection are both required for the bundled software
-flow. If either is missing from your wiring, the examples may compile and
-upload but board bring-up will fail.
-
-## Install
-
-### Option 1: Clone or Download This Repo
-
-Clone the repository, or download it as a ZIP from GitHub.
-
-To use it as a local Arduino library, place the repository folder under your
-Arduino sketchbook `libraries/` directory, for example:
-
-```text
-~/Arduino/libraries/BrainBoard15_arduino_library
+BB15 bb15(pinout, config);
 ```
 
-Then restart Arduino IDE so it rescans local libraries.
+## Supported Direction
 
-### Option 2: Add ZIP Library
+This library is intentionally organized around a few boundaries:
 
-If you downloaded a ZIP from GitHub, use Arduino IDE:
+- library code owns BB15 board control and runtime setup
+- examples own demo policy such as camera capture and interrupt handling
+- board differences are carried by `BB15Pinout`
+- host/runtime tuning is carried by `BB15Config`
 
-- `Sketch` -> `Include Library` -> `Add .ZIP Library...`
+The current examples keep interrupt completion local to the sketch on purpose.
+That keeps the library synchronous and simple unless a broader async API is
+actually needed later.
 
-Point it at the downloaded repository ZIP.
+## Supported Hosts
+
+The current target hosts are:
+
+- Arduino Nicla Sense ME
+- Arduino Nicla Vision
+
+Validation status as of August 17, 2026:
+
+- `bb15_model_flasher` compiled for Nicla Sense ME and Nicla Vision
+- `bb15_inference` compiled for Nicla Sense ME and Nicla Vision
+- `bb15_inference` was hardware-tested on Nicla Sense ME with BB15 using the
+  interrupt-driven completion path
+- Nicla Vision support is compile-validated in this repository, but not
+  hardware-validated in this workspace yet
+
+Classic AVR boards are not a target for this library.
 
 ## Included Examples
 
-- `NiclaVisionModelFlasher`
-  First-time bring-up sketch. Configures BB15, stages the bundled model into
-  external flash, verifies the flashed bytes, links to the AKD1500, and checks
-  that the flashed model can be loaded.
-- `NiclaVisionCameraFlashClassify`
-  Flagship demo. Captures frames from the Nicla Vision camera, preprocesses
-  them for the bundled human-classifier model, runs repeated classification
-  from external flash, and optionally serves frames to the preview tool.
-- `NiclaVisionInaTimerMonitor`
-  Power-measurement example. Samples the BB15 INA monitor on a timer schedule
-  while the board transitions from model-loaded idle into continuous inference.
-  The sketch emits compact CSV intended for offline analysis.
+Two examples are treated as the primary entry points:
 
-## Included Tools
+1. `examples/bb15_model_flasher`
+   This flashes one exported Akida model into BB15 external flash and verifies
+   that it can be loaded back by the runtime.
+2. `examples/bb15_inference`
+   This loads the flashed model and runs interrupt-driven inference. On Nicla
+   Sense ME it uses synthetic input. On Nicla Vision it follows the same BB15
+   runtime path and swaps in camera input.
 
-- `tools/nicla_vision_preview.py`
-  Preview client for `NiclaVisionCameraFlashClassify`.
-- `tools/log_ina_csv.sh`
-  Host-side logger for `NiclaVisionInaTimerMonitor`.
-- `tools/plot_ina_csv.py`
-  PDF report generator for captured INA CSV logs.
-- `tools/README.md`
-  Usage notes for the INA logger and plotter workflow.
+Both sketches are heavily commented and meant to be modified by users.
 
-## Quick Start
+## Getting Started
 
-### 1. Flash the bundled model
-
-Open:
-
-```text
-File -> Examples -> AKD1500 -> NiclaVisionModelFlasher
-```
-
-Build and upload it to the connected Nicla Vision.
-
-This first sketch depends on the `D2 / PA_10` board-level proceed / enable line and
-the `D3 -> AKD1500 RESET_N` connection described above. The flasher first
-drives the board-level control lines high, then asserts AKD reset, straps the
-boot mode through the expander, and finally releases reset before attempting
-flash access and model load.
-
-Expected serial output includes:
-
-- BB15 board setup pass
-- flash stage pass
-- flash verify pass
-- AKD IP version
-- model load pass
-
-If you use `arduino-cli`, the equivalent build/upload flow is:
-
-```bash
-arduino-cli compile --fqbn arduino:mbed_nicla:nicla_vision \
-  /path/to/BrainBoard15_arduino_library/examples/NiclaVisionModelFlasher
-
-arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:mbed_nicla:nicla_vision \
-  /path/to/BrainBoard15_arduino_library/examples/NiclaVisionModelFlasher
-```
-
-### 2. Run the camera classification demo
-
-Open:
-
-```text
-File -> Examples -> AKD1500 -> NiclaVisionCameraFlashClassify
-```
-
-Build and upload it to the same board.
-
-Open Serial Monitor at `115200` baud and confirm:
-
-- camera bring-up pass
-- flash stage + verify pass
-- AKD link pass
-- model info printout
-- repeated inference lines with `human` / `no_human`
-
-The camera demo exposes sketch-level SPI speed knobs near the top of the file:
-
-- `kAkidaSpiClockHz`
-- `kFlashSpiClockHz`
-
-Edit those in the IDE if you want to tune the data path.
-
-### 3. Optional: run the preview tool
-
-The repo includes:
-
-```text
-tools/nicla_vision_preview.py
-```
-
-Requirements:
-
-- Python 3
-- `pyserial`
-- `tkinter` available in your Python install
-
-Install `pyserial` if needed:
-
-```bash
-pip install pyserial
-```
-
-Run the preview app against the camera demo:
-
-```bash
-python3 tools/nicla_vision_preview.py \
-  --port /dev/ttyACM0 \
-  --fps 3 \
-  --assume-demo-config
-```
-
-The preview app requests frames from `NiclaVisionCameraFlashClassify` and shows
-the camera image plus inference metadata.
-
-## Updating the Model
-
-Both published examples keep the model local to the example folder on purpose.
-That makes model replacement explicit and easy to review.
-
-To switch to a new model:
-
-1. Export the new serialized model in the same Arduino-friendly form used here.
-2. Replace these files in both example folders:
+1. Export your model into the example asset files:
    - `program.h`
    - `program.cpp`
-   - `program_header_only.h`
-3. If you want a different flash slot, update `kFlashModelOffset` in both
-   sketches.
-4. Upload `NiclaVisionModelFlasher` again to restage and verify the new model.
-5. Upload `NiclaVisionCameraFlashClassify` and confirm the new model runs.
+   - `model_metadata.h`
+   - `model_metadata.cpp`
+2. Adjust `make_pinout()` if your BB15 stack wiring differs from the defaults.
+3. Upload `examples/bb15_model_flasher`.
+4. Confirm the sketch reports a successful flash and verify pass.
+5. Upload `examples/bb15_inference`.
+6. Confirm inference completes and prints scores.
 
-Keep the same `AKD1500Model` external-flash flow:
+## Arduino CLI Build Checks
 
-```cpp
-model.storage = AKD1500ModelStorage::ExternalFlash;
-model.externalLocation = AkidaNicla::externalModelAddressFromOffset(offset);
+The validated compile commands are:
+
+```bash
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_model_flasher
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_inference
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_model_flasher
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_inference
 ```
 
-## Troubleshooting
+Run these sequentially. Parallel `arduino-cli` compiles can race in the shared
+Arduino cache and produce misleading failures.
 
-- If your wiring was copied from an older connection list or diagram, verify
-  that `D2 / PA_10` is connected to the BB15 board-level proceed / enable
-  input and that `D3` is connected to `AKD1500 RESET_N`. The shipped examples
-  drive `D2 / PA_10` high first, then assert and release `RESET_N` so the
-  AKD1500 can be strapped into external-flash mode before linking.
-- If Arduino IDE opens the example but compiles against a different `AKD1500`
-  library copy, remove stale duplicates from your sketchbook `libraries/`
-  directory and restart the IDE.
-- If the preview tool sees no frames after a fresh USB reconnect, start the
-  preview tool first and tap reset on the Nicla once.
-- If flash stage or verify fails, rerun `NiclaVisionModelFlasher` before trying
-  the camera demo again.
-- If the camera demo prints stable boot logs but no classification loop, verify
-  the model flasher completed successfully and that the BB15 wiring matches the
-  pinout listed above.
+## Repository Layout
+
+- `src/`
+  Public library code and internal runtime support owned by this package.
+- `examples/`
+  The two supported starting-point sketches.
+- `docs/API_DEFINITION.md`
+  The intended public API shape and user-facing review notes.
+- `docs/IMPLEMENTATION_CHECKLIST.md`
+  Remaining work before the library is fully release-hardened.
+
+## Current Gaps
+
+The library is now buildable as a standalone Arduino package in this
+repository, but some cleanup still remains:
+
+- internal runtime naming still carries some legacy `AKD1500` identifiers
+- Nicla Vision still needs hardware validation in this repository
+- CI and release automation are not added yet
+- a project license still needs to be added
