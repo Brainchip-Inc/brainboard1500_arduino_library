@@ -16,11 +16,12 @@ interrupt-driven inference:
 - on Nicla Vision it follows the same BB15 runtime path and swaps in camera
   input
 
-Both sketches are intended to be user-facing examples, not internal test
+All three sketches are intended to be user-facing examples, not internal test
 programs. They should stay readable, heavily commented where needed, and free
 of unnecessary internal clutter.
 
 `bb15_sleep_wake` is the lifecycle example. It loads the flashed model, runs a
 simple synthetic inference, enters Akida sleep through the expander-driven
 sleep control, wakes the device, and re-runs bring-up so users can see the
-intended `sleep()` / `wake()` flow directly.
+intended `sleep()` / `wake()` flow directly. It is optional and sits after the
+main flasher and inference path.

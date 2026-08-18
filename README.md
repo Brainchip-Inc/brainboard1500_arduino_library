@@ -18,8 +18,13 @@ explicit:
 BB15Pinout pinout = BB15Pinout::niclaSenseMeDefaults();
 BB15Config config = BB15Config::niclaVisionDefaults();
 
-BB15 bb15(pinout, config);
+void setup() {
+  static BB15 bb15(pinout, config);
+}
 ```
+
+Construct `BB15` once `setup()` is running. Do not create it as a global
+object, because the constructor touches board hardware state.
 
 ## Supported Direction
 
@@ -41,12 +46,15 @@ The current target hosts are:
 - Arduino Nicla Sense ME
 - Arduino Nicla Vision
 
-Validation status as of August 17, 2026:
+Validation status as of August 18, 2026:
 
 - `bb15_model_flasher` compiled for Nicla Sense ME and Nicla Vision
 - `bb15_inference` compiled for Nicla Sense ME and Nicla Vision
+- `bb15_sleep_wake` compiled for Nicla Sense ME and Nicla Vision
 - `bb15_inference` was hardware-tested on Nicla Sense ME with BB15 using the
   interrupt-driven completion path
+- `bb15_sleep_wake` was hardware-tested on Nicla Sense ME with BB15 using the
+  expander-driven sleep and wake cycle
 - Nicla Vision support is compile-validated in this repository, but not
   hardware-validated in this workspace yet
 
@@ -64,11 +72,11 @@ Three examples are treated as the primary entry points:
    Sense ME it uses synthetic input. On Nicla Vision it follows the same BB15
    runtime path and swaps in camera input.
 3. `examples/bb15_sleep_wake`
-   This demonstrates the new board-level power-state API by loading the flashed
-   model, running inference, putting Akida into sleep, waking it, and bringing
-   the runtime back online.
+   This is an optional lifecycle example. It demonstrates the board-level
+   power-state API by loading the flashed model, running inference, putting
+   Akida into sleep, waking it, and bringing the runtime back online.
 
-Both sketches are heavily commented and meant to be modified by users.
+All three sketches are heavily commented and meant to be modified by users.
 
 ## Getting Started
 
@@ -83,6 +91,8 @@ Both sketches are heavily commented and meant to be modified by users.
 4. Confirm the sketch reports a successful flash and verify pass.
 5. Upload `examples/bb15_inference`.
 6. Confirm inference completes and prints scores.
+7. Optionally upload `examples/bb15_sleep_wake` to validate the `sleep()` /
+   `wake()` lifecycle on your board.
 
 ## Arduino CLI Build Checks
 
