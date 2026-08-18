@@ -14,10 +14,10 @@ Completed:
 - both main examples live in `examples/`
 - Nicla Sense ME and Nicla Vision builds are passing with `arduino-cli`
 - the Nicla Sense ME interrupt-driven inference path was hardware-validated
+- a top-level MIT license file is present
 
 Still open:
 
-- a project license must be added
 - CI for the supported build matrix must be added
 - Nicla Vision still needs hardware validation
 - some internal runtime names still carry legacy `AKD1500` terminology
@@ -26,7 +26,6 @@ Still open:
 
 ### 1. Release Hardening
 
-- add a license file
 - add GitHub Actions or equivalent CI for sequential `arduino-cli` builds
 - write a short release checklist for:
   - compile

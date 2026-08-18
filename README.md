@@ -113,4 +113,3 @@ repository, but some cleanup still remains:
 - internal runtime naming still carries some legacy `AKD1500` identifiers
 - Nicla Vision still needs hardware validation in this repository
 - CI and release automation are not added yet
-- a project license still needs to be added
