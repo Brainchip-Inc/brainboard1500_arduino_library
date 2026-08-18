@@ -788,13 +788,13 @@ BB15Status BB15Runner::loadModel(const BB15Model& model) {
     return setError(BB15Status::ModelInvalid, "invalid_model");
   }
 
-  bb15::internal::RuntimeModel legacy_model;
-  legacy_model.serializedProgram = model.data();
-  legacy_model.size = model.size();
-  legacy_model.storage = map_storage(model.storage());
-  legacy_model.externalLocation = model.externalAddress();
+  bb15::internal::RuntimeModel runtime_model;
+  runtime_model.serializedProgram = model.data();
+  runtime_model.size = model.size();
+  runtime_model.storage = map_storage(model.storage());
+  runtime_model.externalLocation = model.externalAddress();
 
-  const bb15::internal::RuntimeStatus status = backend_->load(legacy_model);
+  const bb15::internal::RuntimeStatus status = backend_->load(runtime_model);
   board_->ip_version_ = backend_->ipVersion();
   if (status != bb15::internal::RuntimeStatus::Ok) {
     const BB15Error mapped = map_error(backend_->lastError());
@@ -953,8 +953,9 @@ BB15RunResult BB15Runner::infer(const BB15Input& input) {
     return result;
   }
 
-  const bb15::internal::RuntimeRunResult legacy = backend_->infer(map_input(input));
-  BB15RunResult result = map_run_result(legacy);
+  const bb15::internal::RuntimeRunResult runtime_result =
+      backend_->infer(map_input(input));
+  BB15RunResult result = map_run_result(runtime_result);
   inference_in_flight_ = false;
   last_error_ = result.error;
   if (result.ok()) {
@@ -985,9 +986,10 @@ BB15ClassificationResult BB15Runner::classify(const BB15Input& input) {
     return result;
   }
 
-  const bb15::internal::RuntimeClassificationResult legacy =
+  const bb15::internal::RuntimeClassificationResult runtime_result =
       backend_->classify(map_input(input));
-  BB15ClassificationResult result = map_classification_result(legacy);
+  BB15ClassificationResult result =
+      map_classification_result(runtime_result);
   inference_in_flight_ = false;
   last_error_ = result.error;
   if (result.ok()) {

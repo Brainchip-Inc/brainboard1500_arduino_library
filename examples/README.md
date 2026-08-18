@@ -17,4 +17,4 @@ interrupt-driven inference:
 
 Both sketches are intended to be user-facing examples, not internal test
 programs. They should stay readable, heavily commented where needed, and free
-of compatibility-copy clutter.
+of unnecessary internal clutter.

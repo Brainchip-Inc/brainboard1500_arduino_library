@@ -1,4 +1,4 @@
-#include "internal/akida_compat/legacy_c_api_adapter.h"
+#include "internal/akida_compat/runtime_c_api_adapter.h"
 
 #include <climits>
 #include <cstring>
@@ -13,19 +13,19 @@
 namespace akida {
 namespace compat {
 
-LegacyCAPIAdapter::LegacyCAPIAdapter(HardwareDevice& device,
-                                     const LegacyCAPIConfig& config)
+RuntimeCAPIAdapter::RuntimeCAPIAdapter(HardwareDevice& device,
+                                       const RuntimeCAPIConfig& config)
     : device_(device), config_(config) {}
 
-void LegacyCAPIAdapter::toggle_clock_counter(bool enable) {
+void RuntimeCAPIAdapter::toggle_clock_counter(bool enable) {
   device_.toggle_clock_counter(enable);
 }
 
-uint32_t LegacyCAPIAdapter::get_clock_counter() {
+uint32_t RuntimeCAPIAdapter::get_clock_counter() {
   return device_.read_clock_counter();
 }
 
-int LegacyCAPIAdapter::program(uint8_t* buffer, size_t size, bool learn_en) {
+int RuntimeCAPIAdapter::program(uint8_t* buffer, size_t size, bool learn_en) {
   if (buffer == nullptr || size == 0u) {
     return failure();
   }
@@ -47,7 +47,7 @@ int LegacyCAPIAdapter::program(uint8_t* buffer, size_t size, bool learn_en) {
   return success();
 }
 
-int LegacyCAPIAdapter::program_only(uint8_t* buffer, size_t size) {
+int RuntimeCAPIAdapter::program_only(uint8_t* buffer, size_t size) {
   if (buffer == nullptr || size == 0u) {
     return failure();
   }
@@ -57,9 +57,9 @@ int LegacyCAPIAdapter::program_only(uint8_t* buffer, size_t size) {
   return program_info_.is_valid() ? success() : failure();
 }
 
-int LegacyCAPIAdapter::program_flash(uint8_t* program_info_buffer, size_t len,
-                                     uint32_t flash_address,
-                                     uint8_t* is_el_model) {
+int RuntimeCAPIAdapter::program_flash(uint8_t* program_info_buffer, size_t len,
+                                      uint32_t flash_address,
+                                      uint8_t* is_el_model) {
   if (program_info_buffer == nullptr || len == 0u) {
     if (is_el_model != nullptr) {
       *is_el_model = 0u;
@@ -89,11 +89,11 @@ int LegacyCAPIAdapter::program_flash(uint8_t* program_info_buffer, size_t len,
   return success();
 }
 
-int LegacyCAPIAdapter::batch_size(int size, bool allocate_inputs) {
+int RuntimeCAPIAdapter::batch_size(int size, bool allocate_inputs) {
   return static_cast<int>(device_.set_batch_size(size, allocate_inputs));
 }
 
-int LegacyCAPIAdapter::learn_mode(bool enable) {
+int RuntimeCAPIAdapter::learn_mode(bool enable) {
   if (current_learn_en_ != enable) {
     device_.toggle_learn(enable);
     current_learn_en_ = enable;
@@ -104,8 +104,8 @@ int LegacyCAPIAdapter::learn_mode(bool enable) {
   return success();
 }
 
-int LegacyCAPIAdapter::forward(uint8_t* input, const uint32_t* input_dims,
-                               uint8_t* output, int output_size) {
+int RuntimeCAPIAdapter::forward(uint8_t* input, const uint32_t* input_dims,
+                                uint8_t* output, int output_size) {
   if (input == nullptr || input_dims == nullptr || output == nullptr ||
       output_size < 0) {
     return failure();
@@ -130,8 +130,8 @@ int LegacyCAPIAdapter::forward(uint8_t* input, const uint32_t* input_dims,
   return success();
 }
 
-int LegacyCAPIAdapter::predict(uint8_t* input, const uint32_t* input_dims,
-                               float* output, int output_size_bytes) {
+int RuntimeCAPIAdapter::predict(uint8_t* input, const uint32_t* input_dims,
+                                float* output, int output_size_bytes) {
   if (input == nullptr || input_dims == nullptr || output == nullptr ||
       output_size_bytes < 0) {
     return failure();
@@ -158,8 +158,8 @@ int LegacyCAPIAdapter::predict(uint8_t* input, const uint32_t* input_dims,
   return success();
 }
 
-void LegacyCAPIAdapter::fit(uint8_t* input, const uint32_t* input_dims,
-                            int32_t* input_label) {
+void RuntimeCAPIAdapter::fit(uint8_t* input, const uint32_t* input_dims,
+                             int32_t* input_label) {
   if (input == nullptr || input_dims == nullptr || input_label == nullptr) {
     return;
   }
@@ -173,8 +173,8 @@ void LegacyCAPIAdapter::fit(uint8_t* input, const uint32_t* input_dims,
   (void)device_.fit(input_vector, labels);
 }
 
-int LegacyCAPIAdapter::enqueue(uint8_t* input, const uint32_t* input_dims,
-                               int32_t* input_label) {
+int RuntimeCAPIAdapter::enqueue(uint8_t* input, const uint32_t* input_dims,
+                                int32_t* input_label) {
   if (input == nullptr || input_dims == nullptr) {
     return failure();
   }
@@ -189,8 +189,8 @@ int LegacyCAPIAdapter::enqueue(uint8_t* input, const uint32_t* input_dims,
   return queued ? success() : failure();
 }
 
-int LegacyCAPIAdapter::fetch(uint8_t* output, int output_size,
-                             bool dequantize) {
+int RuntimeCAPIAdapter::fetch(uint8_t* output, int output_size,
+                              bool dequantize) {
   if (output == nullptr || output_size < 0) {
     return failure();
   }
@@ -222,8 +222,8 @@ int LegacyCAPIAdapter::fetch(uint8_t* output, int output_size,
   return success();
 }
 
-int LegacyCAPIAdapter::save_learn_weights(uint32_t* weights_ptr,
-                                          uint32_t size) {
+int RuntimeCAPIAdapter::save_learn_weights(uint32_t* weights_ptr,
+                                           uint32_t size) {
   if (weights_ptr == nullptr) {
     return failure();
   }
@@ -238,12 +238,12 @@ int LegacyCAPIAdapter::save_learn_weights(uint32_t* weights_ptr,
   return static_cast<int>(layer_size);
 }
 
-uint32_t LegacyCAPIAdapter::learn_mem_size() const {
+uint32_t RuntimeCAPIAdapter::learn_mem_size() const {
   return static_cast<uint32_t>(device_.learn_mem_size() * 4u);
 }
 
-int LegacyCAPIAdapter::update_learn_weights(const uint32_t* weights_ptr,
-                                            uint32_t size) {
+int RuntimeCAPIAdapter::update_learn_weights(const uint32_t* weights_ptr,
+                                             uint32_t size) {
   if (weights_ptr == nullptr) {
     return failure();
   }
@@ -258,8 +258,8 @@ int LegacyCAPIAdapter::update_learn_weights(const uint32_t* weights_ptr,
   return static_cast<int>(layer_size);
 }
 
-int32_t LegacyCAPIAdapter::inferred_class(const int32_t* result,
-                                          int num_classes, int num_neurons) {
+int32_t RuntimeCAPIAdapter::inferred_class(const int32_t* result,
+                                           int num_classes, int num_neurons) {
   if (result == nullptr || num_classes <= 0 || num_neurons <= 0) {
     return -1;
   }
@@ -276,11 +276,11 @@ int32_t LegacyCAPIAdapter::inferred_class(const int32_t* result,
   return max_index / num_neurons;
 }
 
-Shape LegacyCAPIAdapter::hwc_shape(const uint32_t* input_dims) {
+Shape RuntimeCAPIAdapter::hwc_shape(const uint32_t* input_dims) {
   return Shape{input_dims[0], input_dims[1], input_dims[2]};
 }
 
-Shape LegacyCAPIAdapter::bhwc_shape(const uint32_t* input_dims) {
+Shape RuntimeCAPIAdapter::bhwc_shape(const uint32_t* input_dims) {
   return Shape{1u, input_dims[0], input_dims[1], input_dims[2]};
 }
 

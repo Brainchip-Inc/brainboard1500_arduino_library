@@ -1,20 +1,18 @@
-# Legacy Runtime Boundary
+# Internal Runtime Boundary
 
-This subtree contains the transplanted `AKD1500` runtime that the new `BB15`
-API currently depends on internally.
+This subtree contains the low-level device runtime that `BB15` depends on
+internally.
 
-It is placed under `src/internal/legacy_akd1500/` on purpose:
+It lives under `src/internal/legacy_akd1500/` to keep the public library
+surface clean and focused:
 
-- to make it clear that `BB15` is the public library surface
-- to stop presenting `AKD1500.h` as if it were a new top-level public entry
-  point of this repository
-- to give the extraction work a clear home while the runtime is still being
-  renamed, wrapped, or reduced
+- `BB15` remains the intended public include surface
+- examples should include `#include <BB15.h>`
+- internal runtime files stay behind the library boundary
 
 Current policy:
 
-- examples should include `#include <BB15.h>`
 - new public code should not reach for this subtree directly unless there is a
   deliberate internal reason
-- future cleanup can rename or split these files further without changing the
-  public `BB15` include surface
+- internal reorganization in this subtree should not change the public `BB15`
+  include surface

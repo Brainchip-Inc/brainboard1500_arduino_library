@@ -1,15 +1,14 @@
 #pragma once
 
 // This header is the internal translation boundary between the public `BB15`
-// API and the transplanted legacy AKD1500 runtime.
+// API and the internal device runtime.
 //
 // Why this exists:
-// - `BB15` should not directly expose the old runtime naming everywhere in its
+// - `BB15` should not directly spread low-level runtime naming throughout its
 //   own implementation
-// - the legacy runtime still exists, but it should now look like an internal
-//   dependency of the BB15 library rather than a peer public surface
-// - future cleanup can replace or rename the legacy runtime behind this file
-//   without forcing a broad search/replace across every `BB15` source file
+// - the device runtime should remain an internal dependency of the BB15
+//   library rather than a second public surface
+// - future internal cleanup can stay localized behind this file
 
 #include "internal/legacy_akd1500/AKD1500.h"
 

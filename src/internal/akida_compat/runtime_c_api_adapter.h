@@ -10,16 +10,16 @@
 namespace akida {
 namespace compat {
 
-struct LegacyCAPIConfig {
+struct RuntimeCAPIConfig {
   int success_code = 0;
   int failure_code = -1;
   uint32_t flash_base_address = kExternalModelAliasBase;
 };
 
-class LegacyCAPIAdapter {
+class RuntimeCAPIAdapter {
  public:
-  explicit LegacyCAPIAdapter(HardwareDevice& device,
-                             const LegacyCAPIConfig& config = {});
+  explicit RuntimeCAPIAdapter(HardwareDevice& device,
+                              const RuntimeCAPIConfig& config = {});
 
   void toggle_clock_counter(bool enable);
   uint32_t get_clock_counter();
@@ -54,7 +54,7 @@ class LegacyCAPIAdapter {
   int failure() const { return config_.failure_code; }
 
   HardwareDevice& device_;
-  LegacyCAPIConfig config_;
+  RuntimeCAPIConfig config_;
   uint8_t* current_program_ = nullptr;
   bool current_learn_en_ = false;
   ProgramInfo program_info_;
