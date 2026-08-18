@@ -1,6 +1,7 @@
 build/
 dist/
 .arduino/
+docs/
 *.o
 *.a
 *.elf

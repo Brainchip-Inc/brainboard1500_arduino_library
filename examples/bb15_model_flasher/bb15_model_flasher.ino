@@ -48,70 +48,45 @@ constexpr const char* kBundledModelName = "presence_regular_96_gray";
 
 bool g_flash_ok = false;
 const char* g_last_failure_stage = nullptr;
-
-// Define the physical BrainBoard15 wiring here.
-//
-// Users should edit this function first when porting the example to another
-// host board or another BB15 stack variant.
-//
-// Use one of the built-in pinout presets as the base wiring definition, then
-// edit the returned struct only if this host stack differs from the validated
-// board mapping.
-BB15Pinout make_pinout() {
-  BB15Pinout pinout =
+BB15Pinout g_pinout =
 #if defined(TARGET_NICLA_VISION)
-      BB15Pinout::niclaVisionDefaults();
+    BB15Pinout::niclaVisionDefaults();
 #else
-      BB15Pinout::niclaSenseMeDefaults();
+    BB15Pinout::niclaSenseMeDefaults();
 #endif
-  return pinout;
-}
+;
 
-// Define runtime transport policy here.
+// The sketch keeps the three user-edit surfaces as direct objects:
+// - `g_pinout` describes the physical wiring
+// - `g_config` describes runtime transport policy
+// - `g_model` describes the exported model blob
 //
-// This is where users tune:
-// - Akida SPI speed
-// - flash SPI speed
-// - flash storage address
-// - optional forced flash profile
-//
-// Most users should only need to touch the clocks or model address.
-BB15Config make_config() {
+// That shape mirrors the intended public API exactly, so users can copy the
+// same object graph into their own application. Construction itself is delayed
+// until `setup()`, because the `BB15` constructor now touches hardware state
+// and that is not safe during Arduino global initialization.
+BB15Config g_config = []() {
   BB15Config config = BB15Config::niclaVisionDefaults();
   config.spiClockHz = kAkidaSpiClockHz;
   config.flashSpiClockHz = kFlashSpiClockHz;
   config.defaultModelAddress =
       AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset);
   return config;
-}
+}();
 
-BB15& bb15() {
-  static BB15 instance(make_pinout(), make_config());
-  return instance;
-}
+BB15* g_bb15 = nullptr;
+BB15Runner* g_runner = nullptr;
 
-BB15Runner& runner() {
-  static BB15Runner instance = bb15().createRunner();
-  return instance;
-}
-
-// Describe the model that will be written into BB15 external flash.
-//
-// To adapt this example to another model, users typically replace:
-// - `program.h`
-// - `program.cpp`
-// - `model_metadata.h`
-// - `model_metadata.cpp`
-//
-// Then they can keep this function structure and only change the flash address
-// if they do not want to write at offset zero.
-BB15Model make_model() {
+BB15Model g_model = []() {
   BB15Model model(program, static_cast<size_t>(program_len));
   model.setStorage(BB15ModelStorage::ExternalFlash)
       .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
           kFlashModelOffset));
   return model;
-}
+}();
+
+BB15& board() { return *g_bb15; }
+BB15Runner& runner() { return *g_runner; }
 
 void wait_for_serial() {
   const uint32_t start_ms = millis();
@@ -127,7 +102,7 @@ void print_failure(const char* stage) {
   Serial.print(" result=FAIL stage=");
   Serial.print(stage);
   Serial.print(" detail=");
-  bb15().printLastError(Serial);
+  board().printLastError(Serial);
 }
 
 // Fail loudly and visibly so a user at the bench can immediately see that the
@@ -160,18 +135,18 @@ void print_model_summary() {
 // Bring the BB15 board online and confirm that the external flash is present
 // before attempting to write any model bytes.
 bool prepare_board() {
-  if (bb15().begin() != BB15Status::Ok) {
+  if (board().begin() != BB15Status::Ok) {
     print_failure("board_begin");
     return false;
   }
   Serial.print(kLogPrefix);
   Serial.println(" board_setup result=PASS");
 
-  if (!bb15().detectFlash()) {
+  if (!board().detectFlash()) {
     print_failure("detect_flash");
     return false;
   }
-  const BB15FlashInfo flash = bb15().flashInfo();
+  const BB15FlashInfo flash = board().flashInfo();
   Serial.print(kLogPrefix);
   Serial.print(" flash_detect name=");
   Serial.print(flash.name);
@@ -189,8 +164,6 @@ bool prepare_board() {
 // - load the flashed model once so the user gets immediate proof that the
 //   runtime can see and parse it correctly
 bool flash_and_verify_model() {
-  const BB15Model model = make_model();
-
   if (static_cast<int64_t>(program_len) != akida_program_length_bytes) {
     print_failure("program_length_mismatch");
     return false;
@@ -198,13 +171,13 @@ bool flash_and_verify_model() {
 
   Serial.print(kLogPrefix);
   Serial.print(" flash_model address=0x");
-  Serial.println(model.externalAddress(), HEX);
-  if (!bb15().flashModel(model)) {
+  Serial.println(g_model.externalAddress(), HEX);
+  if (!board().flashModel(g_model)) {
     print_failure("flash_model");
     return false;
   }
 
-  if (!bb15().verifyModel(model)) {
+  if (!board().verifyModel(g_model)) {
     print_failure("verify_model");
     return false;
   }
@@ -215,13 +188,13 @@ bool flash_and_verify_model() {
     print_failure("runner_begin");
     return false;
   }
-  if (runner().loadModel(model) != BB15Status::Ok) {
+  if (runner().loadModel(g_model) != BB15Status::Ok) {
     print_failure("load_external_model");
     return false;
   }
   Serial.print(kLogPrefix);
   Serial.print(" akida ip_version=0x");
-  Serial.println(bb15().ipVersion(), HEX);
+  Serial.println(board().ipVersion(), HEX);
   Serial.print(kLogPrefix);
   Serial.print(" model_loaded ");
   runner().printModelInfo(Serial);
@@ -244,6 +217,12 @@ void setup() {
   Serial.println(kSketchName);
   Serial.print(kLogPrefix);
   Serial.println(" board=BB15");
+  static BB15 bb15(g_pinout, g_config);
+  static BB15Runner bb15_runner = bb15.createRunner();
+  g_bb15 = &bb15;
+  g_runner = &bb15_runner;
+  Serial.print(kLogPrefix);
+  Serial.println(" constructor_reset_state=released");
   print_model_summary();
 
   if (!prepare_board()) {

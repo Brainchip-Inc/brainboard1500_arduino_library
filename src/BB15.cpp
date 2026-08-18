@@ -279,6 +279,7 @@ size_t BB15RunResult::elementCount() const {
 BB15::BB15(const BB15Pinout& pinout, const BB15Config& config)
     : pinout_(pinout), config_(config) {
   last_error_ = make_error(BB15Status::Ok, "ok");
+  initializeConstructorResetState();
 }
 
 BB15::~BB15() = default;
@@ -369,6 +370,35 @@ bool BB15::ensureWireStarted() {
   return true;
 }
 
+void BB15::initializeConstructorResetState() {
+  if (pinout_.akidaReset.route == BB15ResetRoute::HostGpio) {
+    pinMode(pinout_.akidaReset.pin, OUTPUT);
+    digitalWrite(pinout_.akidaReset.pin, HIGH);
+    return;
+  }
+
+  if (config_.wire == nullptr) {
+    return;
+  }
+
+  config_.wire->begin();
+  config_.wire->setClock(config_.i2cClockHz);
+  wire_started_ = true;
+  if (!expander_) {
+    expander_.reset(
+        new bb15::PioExpander6408(*config_.wire, config_.expanderAddress));
+  }
+  if (!expander_) {
+    return;
+  }
+
+  (void)expander_->pinMode(pinout_.akidaReset.pin,
+                           bb15::PioExpander6408::PinMode::Output);
+  // Expander reset polarity is active-low at the BB15 side, so released is
+  // represented by a HIGH output here.
+  (void)expander_->digitalWrite(pinout_.akidaReset.pin, true);
+}
+
 bool BB15::ensureExpander() {
   if (expander_) {
     return true;
@@ -435,6 +465,45 @@ bool BB15::releaseAkidaReset() {
     return false;
   }
   delay(config_.resetReleaseSettleMs);
+  return true;
+}
+
+bool BB15::powerDown() {
+  initialized_ = false;
+  s2m_active_ = false;
+  ip_version_ = 0u;
+  detected_flash_jedec_ = 0u;
+  detected_flash_name_ = "unknown";
+  has_supported_flash_profile_ = false;
+  return holdAkidaInReset();
+}
+
+bool BB15::powerUp() {
+  initialized_ = false;
+  s2m_active_ = false;
+  ip_version_ = 0u;
+  return releaseAkidaReset();
+}
+
+bool BB15::sleep() {
+  initialized_ = false;
+  s2m_active_ = false;
+  ip_version_ = 0u;
+  if (!setAkidaSleep(true)) {
+    return false;
+  }
+  delay(config_.sleepEnterSettleMs);
+  return true;
+}
+
+bool BB15::wake() {
+  initialized_ = false;
+  s2m_active_ = false;
+  ip_version_ = 0u;
+  if (!setAkidaSleep(false)) {
+    return false;
+  }
+  delay(config_.sleepExitSettleMs);
   return true;
 }
 

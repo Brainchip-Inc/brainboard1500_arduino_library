@@ -54,7 +54,7 @@ Classic AVR boards are not a target for this library.
 
 ## Included Examples
 
-Two examples are treated as the primary entry points:
+Three examples are treated as the primary entry points:
 
 1. `examples/bb15_model_flasher`
    This flashes one exported Akida model into BB15 external flash and verifies
@@ -63,6 +63,10 @@ Two examples are treated as the primary entry points:
    This loads the flashed model and runs interrupt-driven inference. On Nicla
    Sense ME it uses synthetic input. On Nicla Vision it follows the same BB15
    runtime path and swaps in camera input.
+3. `examples/bb15_sleep_wake`
+   This demonstrates the new board-level power-state API by loading the flashed
+   model, running inference, putting Akida into sleep, waking it, and bringing
+   the runtime back online.
 
 Both sketches are heavily commented and meant to be modified by users.
 
@@ -73,7 +77,8 @@ Both sketches are heavily commented and meant to be modified by users.
    - `program.cpp`
    - `model_metadata.h`
    - `model_metadata.cpp`
-2. Adjust `make_pinout()` if your BB15 stack wiring differs from the defaults.
+2. Adjust the sketch-level `BB15Pinout` if your BB15 stack wiring differs from
+   the defaults.
 3. Upload `examples/bb15_model_flasher`.
 4. Confirm the sketch reports a successful flash and verify pass.
 5. Upload `examples/bb15_inference`.
@@ -86,8 +91,10 @@ The validated compile commands are:
 ```bash
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_model_flasher
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_inference
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_sleep_wake
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_model_flasher
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_inference
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_sleep_wake
 ```
 
 Run these sequentially. Parallel `arduino-cli` compiles can race in the shared
@@ -98,11 +105,7 @@ Arduino cache and produce misleading failures.
 - `src/`
   Public library code and internal runtime support owned by this package.
 - `examples/`
-  The two supported starting-point sketches.
-- `docs/API_DEFINITION.md`
-  The intended public API shape and user-facing review notes.
-- `docs/IMPLEMENTATION_CHECKLIST.md`
-  Remaining work before the library is fully release-hardened.
+  The supported user-facing sketches.
 
 ## Current Gaps
 

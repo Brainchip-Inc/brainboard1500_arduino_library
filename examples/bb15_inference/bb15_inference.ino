@@ -89,6 +89,40 @@ uint16_t g_crop_y[kModelHeight];
 bool g_crop_maps_ready = false;
 #endif
 
+BB15Pinout g_pinout =
+#if defined(TARGET_NICLA_VISION)
+    BB15Pinout::niclaVisionDefaults();
+#else
+    BB15Pinout::niclaSenseMeDefaults();
+#endif
+;
+
+BB15Config g_config = []() {
+  BB15Config config = BB15Config::niclaVisionDefaults();
+  config.spiClockHz = kAkidaSpiClockHz;
+  config.flashSpiClockHz = kFlashSpiClockHz;
+  config.defaultModelAddress =
+      AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset);
+  return config;
+}();
+
+// The examples keep the public API direct, but construction happens in
+// `setup()`, not at global initialization time. On Arduino targets the global
+// constructor phase runs before the board runtime is fully ready, so hardware-
+// touching constructor work must wait until sketch startup.
+BB15* g_bb15 = nullptr;
+BB15Runner* g_runner = nullptr;
+BB15Model g_model = []() {
+  BB15Model model(program, static_cast<size_t>(program_len));
+  model.setStorage(BB15ModelStorage::ExternalFlash)
+      .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
+          kFlashModelOffset));
+  return model;
+}();
+
+BB15& board() { return *g_bb15; }
+BB15Runner& runner() { return *g_runner; }
+
 bool uses_camera_input() {
 #if defined(TARGET_NICLA_VISION)
   return true;
@@ -109,43 +143,6 @@ const char* completion_mode_name() {
   return uses_interrupt_completion() ? "interrupt" : "blocking";
 }
 
-BB15Pinout make_pinout() {
-  BB15Pinout pinout =
-#if defined(TARGET_NICLA_VISION)
-      BB15Pinout::niclaVisionDefaults();
-#else
-      BB15Pinout::niclaSenseMeDefaults();
-#endif
-  return pinout;
-}
-
-BB15Config make_config() {
-  BB15Config config = BB15Config::niclaVisionDefaults();
-  config.spiClockHz = kAkidaSpiClockHz;
-  config.flashSpiClockHz = kFlashSpiClockHz;
-  config.defaultModelAddress =
-      AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset);
-  return config;
-}
-
-BB15& bb15() {
-  static BB15 instance(make_pinout(), make_config());
-  return instance;
-}
-
-BB15Runner& runner() {
-  static BB15Runner instance = bb15().createRunner();
-  return instance;
-}
-
-BB15Model make_model() {
-  BB15Model model(program, static_cast<size_t>(program_len));
-  model.setStorage(BB15ModelStorage::ExternalFlash)
-      .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
-          kFlashModelOffset));
-  return model;
-}
-
 void wait_for_serial() {
   const uint32_t start_ms = millis();
   while (!Serial && (millis() - start_ms) < kSerialWaitMs) {
@@ -160,26 +157,26 @@ void print_failure(const char* stage) {
   Serial.print(" result=FAIL stage=");
   Serial.print(stage);
   Serial.print(" detail=");
-  bb15().printLastError(Serial);
+  board().printLastError(Serial);
 }
 
-TwoWire& expander_bus() { return *bb15().config().wire; }
+TwoWire& expander_bus() { return *board().config().wire; }
 
 bool write_expander_reg8(uint8_t reg, uint8_t value) {
-  expander_bus().beginTransmission(bb15().config().expanderAddress);
+  expander_bus().beginTransmission(board().config().expanderAddress);
   expander_bus().write(reg);
   expander_bus().write(value);
   return expander_bus().endTransmission() == 0u;
 }
 
 bool read_expander_reg8(uint8_t reg, uint8_t& value) {
-  expander_bus().beginTransmission(bb15().config().expanderAddress);
+  expander_bus().beginTransmission(board().config().expanderAddress);
   expander_bus().write(reg);
   if (expander_bus().endTransmission(false) != 0u) {
     return false;
   }
   if (expander_bus().requestFrom(
-          static_cast<int>(bb15().config().expanderAddress), 1) != 1) {
+          static_cast<int>(board().config().expanderAddress), 1) != 1) {
     return false;
   }
   value = static_cast<uint8_t>(expander_bus().read());
@@ -279,19 +276,19 @@ bool service_expander_interrupt(bool* p2_high_out) {
 }
 
 bool begin_interrupt_mode() {
-  pinMode(bb15().pinout().host.interrupt, INPUT);
+  pinMode(board().pinout().host.interrupt, INPUT);
   clear_expander_interrupt_state();
   if (!configure_expander_interrupt_input() ||
       !configure_akida_interrupt_route()) {
     return false;
   }
-  attachInterrupt(digitalPinToInterrupt(bb15().pinout().host.interrupt),
+  attachInterrupt(digitalPinToInterrupt(board().pinout().host.interrupt),
                   on_akida_done_interrupt, FALLING);
   g_interrupt_mode_ready = true;
 
   Serial.print(kLogPrefix);
   Serial.print(" interrupt_mode=ready host_pin=D");
-  Serial.print(static_cast<unsigned long>(bb15().pinout().host.interrupt));
+  Serial.print(static_cast<unsigned long>(board().pinout().host.interrupt));
   Serial.print(" expander_pin=P");
   Serial.print(static_cast<unsigned long>(kExpanderInterruptPin));
   Serial.print(" akida_gpio=");
@@ -510,16 +507,16 @@ void print_scores(const BB15RunResult& scores) {
 }
 
 bool prepare_board_and_runner() {
-  if (bb15().begin() != BB15Status::Ok) {
+  if (board().begin() != BB15Status::Ok) {
     print_failure("board_begin");
     return false;
   }
-  if (!bb15().detectFlash()) {
+  if (!board().detectFlash()) {
     print_failure("detect_flash");
     return false;
   }
 
-  const BB15FlashInfo flash = bb15().flashInfo();
+  const BB15FlashInfo flash = board().flashInfo();
   Serial.print(kLogPrefix);
   Serial.print(" flash_detect name=");
   Serial.print(flash.name);
@@ -531,14 +528,14 @@ bool prepare_board_and_runner() {
     print_failure("runner_begin");
     return false;
   }
-  if (runner().loadModel(make_model()) != BB15Status::Ok) {
+  if (runner().loadModel(g_model) != BB15Status::Ok) {
     print_failure("load_external_model");
     return false;
   }
 
   Serial.print(kLogPrefix);
   Serial.print(" akida ip_version=0x");
-  Serial.println(bb15().ipVersion(), HEX);
+  Serial.println(board().ipVersion(), HEX);
   Serial.print(kLogPrefix);
   Serial.print(" model_loaded ");
   runner().printModelInfo(Serial);
@@ -699,6 +696,12 @@ void setup() {
   Serial.println(kSketchName);
   Serial.print(kLogPrefix);
   Serial.println(" board=BB15");
+  static BB15 bb15(g_pinout, g_config);
+  static BB15Runner bb15_runner = bb15.createRunner();
+  g_bb15 = &bb15;
+  g_runner = &bb15_runner;
+  Serial.print(kLogPrefix);
+  Serial.println(" constructor_reset_state=released");
   Serial.print(kLogPrefix);
   Serial.println(" purpose=load flashed model and run inference");
   print_model_summary();

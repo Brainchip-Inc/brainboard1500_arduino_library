@@ -70,6 +70,8 @@ struct BB15Config {
   uint32_t i2cClockHz = 100000u;
   uint32_t resetAssertMs = 5u;
   uint32_t resetReleaseSettleMs = 10u;
+  uint32_t sleepEnterSettleMs = 1u;
+  uint32_t sleepExitSettleMs = 10u;
 
   const char* forcedFlashProfile = nullptr;
   bool assumeForcedFlashProfileReady = false;
@@ -212,6 +214,10 @@ class BB15 {
   bool setAkidaReset(bool asserted);
   bool holdAkidaInReset();
   bool releaseAkidaReset();
+  bool powerDown();
+  bool powerUp();
+  bool sleep();
+  bool wake();
   bool setAkidaSleep(bool enabled);
 
   bool enterExternalFlashBootMode();
@@ -250,6 +256,7 @@ class BB15 {
   uint32_t logicalFlashOffset(uint32_t address_or_offset) const;
   bool ensureWireStarted();
   bool ensureExpander();
+  void initializeConstructorResetState();
 
   BB15Pinout pinout_;
   BB15Config config_;
