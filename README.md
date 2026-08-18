@@ -2,8 +2,7 @@
 
 `BB15` is the board-centric Arduino library for BrainBoard15.
 
-The public API is centered on the physical BB15 board rather than the older
-`AKD1500`-named surface:
+The public API is centered on the physical BB15 board:
 
 - `BB15` handles board bring-up, reset routing, expander access, flash access,
   and transport state.
@@ -107,9 +106,9 @@ Arduino cache and produce misleading failures.
 
 ## Current Gaps
 
-The library is now buildable as a standalone Arduino package in this
-repository, but some cleanup still remains:
+The library is buildable as an Arduino package in this repository, but some
+cleanup still remains:
 
-- internal runtime naming still carries some legacy `AKD1500` identifiers
+- some internal implementation names should still be simplified
 - Nicla Vision still needs hardware validation in this repository
 - CI and release automation are not added yet

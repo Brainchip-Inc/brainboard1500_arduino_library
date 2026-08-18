@@ -5,7 +5,7 @@
 Define a public Arduino API for BrainBoard15 that matches how the hardware is
 actually used:
 
-- the library is centered on the BB15 board, not only the AKD1500 runtime
+- the library is centered on the BB15 board
 - board bring-up, expander control, reset strapping, and flash access are
   first-class responsibilities
 - model handling is explicit and inspectable
