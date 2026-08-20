@@ -8,14 +8,12 @@
 
 #include <SPI.h>
 
-// Low-level AKD1500 transport logs are disabled by default.
-//
-// The public examples should show concise board/model progress unless a user is
-// actively debugging the runtime itself. Developers can re-enable the detailed
-// `[AKD1500][...]` trace stream by defining `AKD1500_LIBRARY_ENABLE_LOGS=1`
-// before building the library.
+// Keep low-level AKD1500 transport logs enabled while the Nicla Vision
+// bridge-flash bring-up is still being validated. This makes real hardware
+// failures report the exact sub-step instead of collapsing to a generic
+// `flash_stage_failed` at the BB15 layer.
 #ifndef AKD1500_LIBRARY_ENABLE_LOGS
-#define AKD1500_LIBRARY_ENABLE_LOGS 0
+#define AKD1500_LIBRARY_ENABLE_LOGS 1
 #endif
 
 #if defined(ARDUINO_NICLA_VISION) || defined(ARDUINO_NICLA) || \

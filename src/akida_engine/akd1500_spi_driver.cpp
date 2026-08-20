@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdarg>
 #include <type_traits>
 
 #ifdef ARDUINO
@@ -17,11 +18,36 @@
 namespace akida {
 
 #ifndef AKD1500_LIBRARY_ENABLE_LOGS
-#define AKD1500_LIBRARY_ENABLE_LOGS 0
+#define AKD1500_LIBRARY_ENABLE_LOGS 1
 #endif
 
+namespace {
+
+void akd1500_log_printf(const char* format, ...) {
+#if defined(ARDUINO)
+    if (!Serial) {
+        return;
+    }
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    const int count = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    if (count > 0) {
+        Serial.print(buffer);
+    }
+#else
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+#endif
+}
+
+}  // namespace
+
 #if AKD1500_LIBRARY_ENABLE_LOGS
-#define AKD1500_LIBRARY_LOG(...) std::printf(__VA_ARGS__)
+#define AKD1500_LIBRARY_LOG(...) akd1500_log_printf(__VA_ARGS__)
 #else
 #define AKD1500_LIBRARY_LOG(...) ((void)0)
 #endif

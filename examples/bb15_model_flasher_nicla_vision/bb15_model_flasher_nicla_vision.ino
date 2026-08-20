@@ -1,11 +1,7 @@
 #include <Arduino.h>
 
-#if defined(TARGET_NICLA_VISION) || defined(TARGET_NICLA)
-
+#define AKD1500_LIBRARY_ENABLE_LOGS 1
 #include <BB15.h>
-#if defined(TARGET_NICLA) && !defined(TARGET_NICLA_VISION)
-#include <Nicla_System.h>
-#endif
 
 #include "model_metadata.h"
 #include "program.h"
@@ -23,9 +19,9 @@ namespace {
 // 5. upload an inference sketch that loads the model from flash
 //
 // The three user-edit areas are:
-// - `make_pinout()` for board wiring differences
-// - `make_config()` for transport and flash address policy
-// - `make_model()` for the actual exported model blob
+// - `g_pinout` for board wiring differences
+// - `g_config` for transport and flash address policy
+// - `g_model` for the actual exported model blob
 
 constexpr uint32_t kSerialBaud = 115200u;
 constexpr uint32_t kSerialWaitMs = 3000u;
@@ -42,19 +38,13 @@ constexpr uint32_t kFlashModelOffset = 0u;
 // inspect and adapt without digging through library internals.
 constexpr uint32_t kAkidaSpiClockHz = 25000000u;
 constexpr uint32_t kFlashSpiClockHz = 2000000u;
-constexpr const char* kSketchName = "bb15_model_flasher";
-constexpr const char* kLogPrefix = "[bb15_model_flasher]";
+constexpr const char* kSketchName = "bb15_model_flasher_nicla_vision";
+constexpr const char* kLogPrefix = "[bb15_model_flasher_nicla_vision]";
 constexpr const char* kBundledModelName = "presence_regular_96_gray";
 
 bool g_flash_ok = false;
 const char* g_last_failure_stage = nullptr;
-BB15Pinout g_pinout =
-#if defined(TARGET_NICLA_VISION)
-    BB15Pinout::niclaVisionDefaults();
-#else
-    BB15Pinout::niclaSenseMeDefaults();
-#endif
-;
+BB15Pinout g_pinout = BB15Pinout::niclaVisionDefaults();
 
 // The sketch keeps the three user-edit surfaces as direct objects:
 // - `g_pinout` describes the physical wiring
@@ -66,7 +56,7 @@ BB15Pinout g_pinout =
 // until `setup()`, because the `BB15` constructor now touches hardware state
 // and that is not safe during Arduino global initialization.
 BB15Config g_config = []() {
-  BB15Config config = BB15Config::niclaVisionDefaults();
+  BB15Config config = BB15Config::defaults();
   config.spiClockHz = kAkidaSpiClockHz;
   config.flashSpiClockHz = kFlashSpiClockHz;
   config.defaultModelAddress =
@@ -101,6 +91,8 @@ void print_failure(const char* stage) {
   Serial.print(kLogPrefix);
   Serial.print(" result=FAIL stage=");
   Serial.print(stage);
+  Serial.print(" ip_version=0x");
+  Serial.print(board().ipVersion(), HEX);
   Serial.print(" detail=");
   board().printLastError(Serial);
 }
@@ -130,6 +122,18 @@ void print_model_summary() {
   Serial.print(kBundledModelName);
   Serial.print(" bytes=");
   Serial.println(static_cast<long>(akida_program_length_bytes));
+}
+
+void print_board_configuration() {
+  Serial.print(kLogPrefix);
+  Serial.print(" spi akida_hz=");
+  Serial.print(static_cast<unsigned long>(g_config.spiClockHz));
+  Serial.print(" flash_hz=");
+  Serial.println(static_cast<unsigned long>(g_config.flashSpiClockHz));
+
+  Serial.print(kLogPrefix);
+  Serial.print(" pinout ");
+  board().printSummary(Serial);
 }
 
 // Bring the BB15 board online and confirm that the external flash is present
@@ -224,6 +228,7 @@ void setup() {
   Serial.print(kLogPrefix);
   Serial.println(" constructor_reset_state=released");
   print_model_summary();
+  print_board_configuration();
 
   if (!prepare_board()) {
     blink_forever();
@@ -245,29 +250,3 @@ void loop() {
   set_led(false);
   delay(g_flash_ok ? 950 : 50);
 }
-
-#else
-
-namespace {
-
-constexpr uint32_t kSerialBaud = 115200u;
-constexpr uint32_t kSerialWaitMs = 1500u;
-
-void wait_for_serial() {
-  const uint32_t start_ms = millis();
-  while (!Serial && (millis() - start_ms) < kSerialWaitMs) {
-  }
-}
-
-}  // namespace
-
-void setup() {
-  Serial.begin(kSerialBaud);
-  wait_for_serial();
-  Serial.println(
-      "bb15_model_flasher: runtime support requires a supported Nicla board + BB15");
-}
-
-void loop() {}
-
-#endif

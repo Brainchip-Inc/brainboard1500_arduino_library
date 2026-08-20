@@ -53,6 +53,7 @@ class ArduinoSpiDriver final : public akida::AbstractSpiDriver {
   void write(const uint8_t* data, size_t size) override;
   void transfer(const uint8_t* tx, uint8_t* rx, size_t size) override;
   void chip_select(uint32_t slave_id, bool active) override;
+  SPIClass& spi_bus();
 
  private:
   SPIClass* spi_bus_ = &SPI;
@@ -61,7 +62,6 @@ class ArduinoSpiDriver final : public akida::AbstractSpiDriver {
   bool initialized_ = false;
   bool active_ = false;
 
-  SPIClass& spi_bus();
   SPISettings make_spi_settings() const;
   bool begin_transfer();
   void end_transfer(bool temporary);

@@ -1,27 +1,20 @@
 # Examples
 
-This library currently ships with three primary examples:
+This library now ships with four explicit board-specific sketches:
 
-- `bb15_model_flasher`
-- `bb15_inference`
-- `bb15_sleep_wake`
+- `bb15_model_flasher_nicla_sense`
+- `bb15_dummy_inference_nicla_sense`
+- `bb15_model_flasher_nicla_vision`
+- `bb15_dummy_inference_nicla_vision`
 
-`bb15_model_flasher` is the first-step sketch. It flashes one exported Akida
-model into BB15 external flash and verifies that the runtime can load it.
+The two flasher sketches are the first-step examples. They flash one exported
+Akida model into BB15 external flash, verify it, and confirm that the runtime
+can load the model back.
 
-`bb15_inference` is the follow-up sketch. It loads the flashed model and runs
-interrupt-driven inference:
+The two dummy inference sketches are the follow-up examples. They load the
+flashed model from BB15 external flash and run interrupt-driven synthetic
+inference so users can validate the runtime path before adding a real sensor or
+camera source.
 
-- on Nicla Sense ME it uses synthetic input
-- on Nicla Vision it follows the same BB15 runtime path and swaps in camera
-  input
-
-All three sketches are intended to be user-facing examples, not internal test
-programs. They should stay readable, heavily commented where needed, and free
-of unnecessary internal clutter.
-
-`bb15_sleep_wake` is the lifecycle example. It loads the flashed model, runs a
-simple synthetic inference, enters Akida sleep through the expander-driven
-sleep control, wakes the device, and re-runs bring-up so users can see the
-intended `sleep()` / `wake()` flow directly. It is optional and sits after the
-main flasher and inference path.
+All four sketches are intended to be user-facing examples. They should stay
+readable, self-contained, and explicit about which host board they target.

@@ -203,7 +203,7 @@ BB15ClassificationResult map_classification_result(
 
 }  // namespace
 
-BB15Config BB15Config::niclaVisionDefaults() {
+BB15Config BB15Config::defaults() {
   BB15Config config;
   config.spiClockHz = 25000000u;
   config.flashSpiClockHz = 2000000u;
@@ -212,12 +212,11 @@ BB15Config BB15Config::niclaVisionDefaults() {
 
 BB15Pinout BB15Pinout::niclaVisionDefaults() {
   BB15Pinout pinout;
-  pinout.host.proceed = 2u;
   pinout.host.akidaCs = 7u;
-  pinout.host.bridgeCs = 1u;
+  pinout.host.ttModeCs = 3u;
   pinout.host.interrupt = 0u;
-  pinout.akidaReset.route = BB15ResetRoute::HostGpio;
-  pinout.akidaReset.pin = 3u;
+  pinout.akidaReset.route = BB15ResetRoute::Expander;
+  pinout.akidaReset.pin = 4u;
   pinout.expander.bootMode = 0u;
   pinout.expander.akidaSleep = 1u;
   pinout.expander.akidaInterrupt = 2u;
@@ -226,9 +225,8 @@ BB15Pinout BB15Pinout::niclaVisionDefaults() {
 
 BB15Pinout BB15Pinout::niclaSenseMeDefaults() {
   BB15Pinout pinout;
-  pinout.host.proceed = 10u;
   pinout.host.akidaCs = 6u;
-  pinout.host.bridgeCs = 0u;
+  pinout.host.ttModeCs = 0u;
   pinout.host.interrupt = 5u;
   pinout.akidaReset.route = BB15ResetRoute::Expander;
   pinout.akidaReset.pin = 4u;
@@ -295,7 +293,7 @@ bb15::internal::RuntimeOptions BB15::toRuntimeOptions() const {
       bb15::internal::RuntimeOptions::niclaVisionDefaults();
   options.spiBus = config_.spi;
   options.akidaCsPin = pinout_.host.akidaCs;
-  options.bridgeCsPin = pinout_.host.bridgeCs;
+  options.bridgeCsPin = pinout_.host.ttModeCs;
   options.spiClockHz = config_.spiClockHz;
   options.flashSpiClockHz = config_.flashSpiClockHz;
   options.expectedIpVersion = config_.expectedIpVersion;
@@ -321,7 +319,7 @@ bool BB15::ensureLowLevelBoard() {
   bb15::internal::RuntimeBoardConfig config;
   config.spi_bus = config_.spi;
   config.pins.akida_cs = pinout_.host.akidaCs;
-  config.pins.bridge_cs = pinout_.host.bridgeCs;
+  config.pins.bridge_cs = pinout_.host.ttModeCs;
   config.spi_clock_hz = config_.spiClockHz;
   config.flash_spi_clock_hz = config_.flashSpiClockHz;
   config.external_program_data_address = config_.defaultModelAddress;
@@ -368,6 +366,14 @@ bool BB15::ensureWireStarted() {
   config_.wire->setClock(config_.i2cClockHz);
   wire_started_ = true;
   return true;
+}
+
+void BB15::prepareHostSpiPinsForAkidaAccess() {
+  pinMode(pinout_.host.akidaCs, OUTPUT);
+  digitalWrite(pinout_.host.akidaCs, HIGH);
+
+  pinMode(pinout_.host.ttModeCs, OUTPUT);
+  digitalWrite(pinout_.host.ttModeCs, HIGH);
 }
 
 void BB15::initializeConstructorResetState() {
@@ -526,9 +532,7 @@ bool BB15::enterExternalFlashBootMode() {
     return false;
   }
 
-  pinMode(pinout_.host.proceed, OUTPUT);
-  digitalWrite(pinout_.host.proceed, HIGH);
-
+  prepareHostSpiPinsForAkidaAccess();
   setAkidaReset(true);
   delay(config_.resetAssertMs);
 
@@ -552,9 +556,7 @@ bool BB15::coldBootExternalFlashMode(uint32_t holdResetMs) {
     return false;
   }
 
-  pinMode(pinout_.host.proceed, OUTPUT);
-  digitalWrite(pinout_.host.proceed, HIGH);
-
+  prepareHostSpiPinsForAkidaAccess();
   setAkidaReset(true);
   if (!expander_->pinMode(pinout_.expander.bootMode,
                           bb15::PioExpander6408::PinMode::Output) ||
@@ -686,38 +688,76 @@ bool BB15::s2mExit() {
 
 bool BB15::programExternalData(const uint8_t* data, size_t size,
                                uint32_t address) {
+#if !AKD1500_PLATFORM_SUPPORTED
+  (void)data;
+  (void)size;
+  (void)address;
+  setError(BB15Status::TransportStateError, "unsupported_platform_flash_write");
+  return false;
+#else
   if (data == nullptr || size == 0u) {
     setError(BB15Status::InvalidInput, "invalid_external_data");
     return false;
   }
 
-  const bb15::internal::RuntimeOptions options = toRuntimeOptions();
-  const bool ok = bb15::internal::stage_model_to_flash(
-      options, data, size, normalizeAddress(address));
+  if (!detectFlash()) {
+    return false;
+  }
+  if (!ensureLowLevelBoard()) {
+    setError(BB15Status::InvalidConfig, "board_create_failed");
+    return false;
+  }
+
+  const bool ok = low_level_board_->stage_program_data_to_bridge_flash(
+      data, size, normalizeAddress(address));
+  ip_version_ = low_level_board_->read_ip_version();
+  detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
+  detected_flash_name_ = low_level_board_->detected_flash_name();
+  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
   if (!ok) {
     setError(BB15Status::FlashStageFailed, "flash_stage_failed");
     return false;
   }
   last_error_ = make_error(BB15Status::Ok, "ok");
   return true;
+#endif
 }
 
 bool BB15::verifyExternalData(const uint8_t* data, size_t size,
                               uint32_t address) {
+#if !AKD1500_PLATFORM_SUPPORTED
+  (void)data;
+  (void)size;
+  (void)address;
+  setError(BB15Status::TransportStateError, "unsupported_platform_flash_verify");
+  return false;
+#else
   if (data == nullptr || size == 0u) {
     setError(BB15Status::InvalidInput, "invalid_external_data");
     return false;
   }
 
-  const bb15::internal::RuntimeOptions options = toRuntimeOptions();
-  const bool ok = bb15::internal::verify_model_in_flash(
-      options, data, size, normalizeAddress(address));
+  if (!detectFlash()) {
+    return false;
+  }
+  if (!ensureLowLevelBoard()) {
+    setError(BB15Status::InvalidConfig, "board_create_failed");
+    return false;
+  }
+
+  const bool ok = low_level_board_->verify_program_data_from_bridge_flash(
+      data, size, normalizeAddress(address));
+  ip_version_ = low_level_board_->read_ip_version();
+  detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
+  detected_flash_name_ = low_level_board_->detected_flash_name();
+  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
   if (!ok) {
     setError(BB15Status::FlashVerifyFailed, "flash_verify_failed");
     return false;
   }
   last_error_ = make_error(BB15Status::Ok, "ok");
   return true;
+#endif
 }
 
 bool BB15::readExternalData(uint32_t address, uint8_t* out, size_t size) {
@@ -788,9 +828,7 @@ void BB15::printSummary(Print& out) const {
   out.println("board=BB15");
   out.print("expander=0x");
   out.println(config_.expanderAddress, HEX);
-  out.print("pins proceed=");
-  out.print(pinout_.host.proceed);
-  out.print(" akida_reset=");
+  out.print("pins akida_reset=");
   if (pinout_.akidaReset.route == BB15ResetRoute::HostGpio) {
     out.print("host:");
   } else {
@@ -799,8 +837,8 @@ void BB15::printSummary(Print& out) const {
   out.print(pinout_.akidaReset.pin);
   out.print(" akida_cs=");
   out.print(pinout_.host.akidaCs);
-  out.print(" bridge_cs=");
-  out.print(pinout_.host.bridgeCs);
+  out.print(" tt_mode_cs=");
+  out.print(pinout_.host.ttModeCs);
   out.print(" interrupt=");
   out.println(pinout_.host.interrupt);
 }

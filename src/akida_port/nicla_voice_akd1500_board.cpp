@@ -2,10 +2,15 @@
 
 #include <array>
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
+
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 
 #if __has_include(<SPIF/SPIFBlockDevice.h>)
 #include <SPIF/SPIFBlockDevice.h>
@@ -20,8 +25,37 @@
 
 namespace akida_port {
 
+#ifndef AKD1500_LIBRARY_ENABLE_LOGS
+#define AKD1500_LIBRARY_ENABLE_LOGS 1
+#endif
+
+namespace {
+
+void akd1500_log_printf(const char* format, ...) {
+#if defined(ARDUINO)
+  if (!Serial) {
+    return;
+  }
+  char buffer[256];
+  va_list args;
+  va_start(args, format);
+  const int count = vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  if (count > 0) {
+    Serial.print(buffer);
+  }
+#else
+  va_list args;
+  va_start(args, format);
+  vprintf(format, args);
+  va_end(args);
+#endif
+}
+
+}  // namespace
+
 #if AKD1500_LIBRARY_ENABLE_LOGS
-#define AKD1500_LIBRARY_LOG(...) std::printf(__VA_ARGS__)
+#define AKD1500_LIBRARY_LOG(...) akd1500_log_printf(__VA_ARGS__)
 #else
 #define AKD1500_LIBRARY_LOG(...) ((void)0)
 #endif
@@ -591,9 +625,19 @@ bool flash_bridge_write_register(ArduinoSpiDriver& spi_driver,
 bool flash_bridge_write_enable(ArduinoSpiDriver& spi_driver,
                                uint8_t bridge_cs_pin) {
   if (!flash_bridge_cmd1(spi_driver, bridge_cs_pin, kFlashCmdWriteEnable)) {
+    AKD1500_LIBRARY_LOG(
+        "[AKD1500][flash] write_enable cmd failed\r\n");
     return false;
   }
-  return flash_bridge_wait_wel(spi_driver, bridge_cs_pin, true);
+  const bool ok = flash_bridge_wait_wel(spi_driver, bridge_cs_pin, true);
+  const uint8_t status1 = flash_bridge_read_status(spi_driver, bridge_cs_pin);
+  const uint8_t status2 = flash_bridge_read_status2(spi_driver, bridge_cs_pin);
+  AKD1500_LIBRARY_LOG(
+      "[AKD1500][flash] write_enable result=%s sr1=0x%02X sr2=0x%02X\r\n",
+      ok ? "PASS" : "FAIL",
+      static_cast<unsigned>(status1),
+      static_cast<unsigned>(status2));
+  return ok;
 }
 
 bool flash_bridge_reset_preamble(ArduinoSpiDriver& spi_driver,
@@ -617,6 +661,9 @@ bool flash_bridge_reset_preamble(ArduinoSpiDriver& spi_driver,
 bool flash_bridge_sector_erase(ArduinoSpiDriver& spi_driver,
                                uint8_t bridge_cs_pin, uint32_t address) {
   if (!flash_bridge_write_enable(spi_driver, bridge_cs_pin)) {
+    AKD1500_LIBRARY_LOG(
+        "[AKD1500][flash] sector erase aborted: write_enable failed addr=0x%08lX\r\n",
+        static_cast<unsigned long>(address));
     return false;
   }
 
@@ -628,10 +675,21 @@ bool flash_bridge_sector_erase(ArduinoSpiDriver& spi_driver,
   };
   uint8_t rx[4] = {0u, 0u, 0u, 0u};
   if (!bridge_transfer(spi_driver, bridge_cs_pin, tx, rx, sizeof(tx))) {
+    AKD1500_LIBRARY_LOG(
+        "[AKD1500][flash] sector erase cmd transfer failed addr=0x%08lX\r\n",
+        static_cast<unsigned long>(address));
     return false;
   }
-
-  return flash_bridge_wait_ready(spi_driver, bridge_cs_pin, 2000u);
+  const bool ok = flash_bridge_wait_ready(spi_driver, bridge_cs_pin, 2000u);
+  const uint8_t status1 = flash_bridge_read_status(spi_driver, bridge_cs_pin);
+  const uint8_t status2 = flash_bridge_read_status2(spi_driver, bridge_cs_pin);
+  AKD1500_LIBRARY_LOG(
+      "[AKD1500][flash] sector erase result=%s addr=0x%08lX sr1=0x%02X sr2=0x%02X\r\n",
+      ok ? "PASS" : "FAIL",
+      static_cast<unsigned long>(address),
+      static_cast<unsigned>(status1),
+      static_cast<unsigned>(status2));
+  return ok;
 }
 
 bool flash_bridge_page_program(ArduinoSpiDriver& spi_driver,
@@ -1360,6 +1418,12 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
       static_cast<unsigned long>(external_program_data_address),
       static_cast<unsigned long>(flash_offset));
 
+  const uint32_t original_spi_clock_hz = spi_driver_.clock_hz();
+  const uint32_t flash_spi_clock_hz =
+      (config_.flash_spi_clock_hz != 0u) ? config_.flash_spi_clock_hz
+                                         : original_spi_clock_hz;
+  spi_driver_.set_clock_hz(flash_spi_clock_hz);
+
   pinMode(config_.pins.bridge_cs, OUTPUT);
   digitalWrite(config_.pins.bridge_cs, HIGH);
   delayMicroseconds(5);
@@ -1368,6 +1432,7 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
   uint32_t ctrl_before = 0u;
   if (!s2m_enter(*akida_driver_, &ctrl_before)) {
     AKD1500_LIBRARY_LOG("[AKD1500][flash] stage failed: s2m enter\r\n");
+    spi_driver_.set_clock_hz(original_spi_clock_hz);
     return false;
   }
 
@@ -1462,6 +1527,7 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
   }
 
   s2m_leave(*akida_driver_, spi_driver_, config_.pins.bridge_cs, ctrl_before);
+  spi_driver_.set_clock_hz(original_spi_clock_hz);
   if (!ok) {
     AKD1500_LIBRARY_LOG("[AKD1500][flash] stage failed during erase/program/verify\r\n");
     return false;
@@ -1504,9 +1570,15 @@ bool AKD1500Board::verify_program_data_from_bridge_flash(
 
   const uint8_t* program_data = serialized_program + program_info_size;
   const size_t program_data_size = serialized_program_size - program_info_size;
+  const uint32_t original_spi_clock_hz = spi_driver_.clock_hz();
+  const uint32_t flash_spi_clock_hz =
+      (config_.flash_spi_clock_hz != 0u) ? config_.flash_spi_clock_hz
+                                         : original_spi_clock_hz;
+  spi_driver_.set_clock_hz(flash_spi_clock_hz);
   uint32_t ctrl_before = 0u;
   if (!s2m_enter(*akida_driver_, &ctrl_before)) {
     AKD1500_LIBRARY_LOG("[AKD1500][flash] verify failed: s2m enter\r\n");
+    spi_driver_.set_clock_hz(original_spi_clock_hz);
     return false;
   }
 
@@ -1528,7 +1600,13 @@ bool AKD1500Board::verify_program_data_from_bridge_flash(
   }
 
   s2m_leave(*akida_driver_, spi_driver_, config_.pins.bridge_cs, ctrl_before);
-  return ok;
+  spi_driver_.set_clock_hz(original_spi_clock_hz);
+  if (!ok) {
+    AKD1500_LIBRARY_LOG("[AKD1500][flash] verify via bridge failed\r\n");
+    return false;
+  }
+
+  return true;
 }
 
 akida::HardwareDriver& AKD1500Board::hardware_driver() {

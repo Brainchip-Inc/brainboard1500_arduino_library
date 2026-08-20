@@ -16,7 +16,7 @@ explicit:
 #include <BB15.h>
 
 BB15Pinout pinout = BB15Pinout::niclaSenseMeDefaults();
-BB15Config config = BB15Config::niclaVisionDefaults();
+BB15Config config = BB15Config::defaults();
 
 void setup() {
   static BB15 bb15(pinout, config);
@@ -26,19 +26,6 @@ void setup() {
 Construct `BB15` once `setup()` is running. Do not create it as a global
 object, because the constructor touches board hardware state.
 
-## Supported Direction
-
-This library is intentionally organized around a few boundaries:
-
-- library code owns BB15 board control and runtime setup
-- examples own demo policy such as camera capture and interrupt handling
-- board differences are carried by `BB15Pinout`
-- host/runtime tuning is carried by `BB15Config`
-
-The current examples keep interrupt completion local to the sketch on purpose.
-That keeps the library synchronous and simple unless a broader async API is
-actually needed later.
-
 ## Supported Hosts
 
 The current target hosts are:
@@ -46,37 +33,26 @@ The current target hosts are:
 - Arduino Nicla Sense ME
 - Arduino Nicla Vision
 
-Validation status as of August 18, 2026:
-
-- `bb15_model_flasher` compiled for Nicla Sense ME and Nicla Vision
-- `bb15_inference` compiled for Nicla Sense ME and Nicla Vision
-- `bb15_sleep_wake` compiled for Nicla Sense ME and Nicla Vision
-- `bb15_inference` was hardware-tested on Nicla Sense ME with BB15 using the
-  interrupt-driven completion path
-- `bb15_sleep_wake` was hardware-tested on Nicla Sense ME with BB15 using the
-  expander-driven sleep and wake cycle
-- Nicla Vision support is compile-validated in this repository, but not
-  hardware-validated in this workspace yet
-
 Classic AVR boards are not a target for this library.
 
 ## Included Examples
 
-Three examples are treated as the primary entry points:
+The example set is intentionally small and board-specific:
 
-1. `examples/bb15_model_flasher`
-   This flashes one exported Akida model into BB15 external flash and verifies
-   that it can be loaded back by the runtime.
-2. `examples/bb15_inference`
-   This loads the flashed model and runs interrupt-driven inference. On Nicla
-   Sense ME it uses synthetic input. On Nicla Vision it follows the same BB15
-   runtime path and swaps in camera input.
-3. `examples/bb15_sleep_wake`
-   This is an optional lifecycle example. It demonstrates the board-level
-   power-state API by loading the flashed model, running inference, putting
-   Akida into sleep, waking it, and bringing the runtime back online.
+1. `examples/bb15_model_flasher_nicla_sense`
+   Flashes one exported Akida model into BB15 external flash from a Nicla Sense
+   ME host and verifies that the runtime can load it back.
+2. `examples/bb15_dummy_inference_nicla_sense`
+   Loads the flashed model and runs interrupt-driven synthetic inference on a
+   Nicla Sense ME host.
+3. `examples/bb15_model_flasher_nicla_vision`
+   Flashes one exported Akida model into BB15 external flash from a Nicla
+   Vision host and verifies that the runtime can load it back.
+4. `examples/bb15_dummy_inference_nicla_vision`
+   Loads the flashed model and runs interrupt-driven synthetic inference on a
+   Nicla Vision host.
 
-All three sketches are heavily commented and meant to be modified by users.
+All four sketches are heavily commented and meant to be modified by users.
 
 ## Getting Started
 
@@ -85,30 +61,37 @@ All three sketches are heavily commented and meant to be modified by users.
    - `program.cpp`
    - `model_metadata.h`
    - `model_metadata.cpp`
-2. Adjust the sketch-level `BB15Pinout` if your BB15 stack wiring differs from
-   the defaults.
-3. Upload `examples/bb15_model_flasher`.
+2. Pick the example pair that matches your host board.
+3. Upload the matching `bb15_model_flasher_*` sketch.
 4. Confirm the sketch reports a successful flash and verify pass.
-5. Upload `examples/bb15_inference`.
+5. Upload the matching `bb15_dummy_inference_*` sketch.
 6. Confirm inference completes and prints scores.
-7. Optionally upload `examples/bb15_sleep_wake` to validate the `sleep()` /
-   `wake()` lifecycle on your board.
 
 ## Arduino CLI Build Checks
 
-The validated compile commands are:
+The current validated compile commands are:
 
 ```bash
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_model_flasher
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_inference
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_sleep_wake
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_model_flasher
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_inference
-arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_sleep_wake
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_model_flasher_nicla_sense
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_sense --library . examples/bb15_dummy_inference_nicla_sense
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_model_flasher_nicla_vision
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_dummy_inference_nicla_vision
 ```
 
 Run these sequentially. Parallel `arduino-cli` compiles can race in the shared
 Arduino cache and produce misleading failures.
+
+## Validation Status
+
+Validation status as of August 20, 2026:
+
+- all four primary examples compile successfully in this repository
+- the Nicla Sense ME flasher and dummy inference examples compile for
+  `arduino:mbed_nicla:nicla_sense`
+- the Nicla Vision flasher and dummy inference examples compile for
+  `arduino:mbed_nicla:nicla_vision`
+- the Nicla Vision flasher has been hardware-validated in this workspace and
+  now completes flash, verify, and model load successfully
 
 ## Repository Layout
 
@@ -116,12 +99,3 @@ Arduino cache and produce misleading failures.
   Public library code and internal runtime support owned by this package.
 - `examples/`
   The supported user-facing sketches.
-
-## Current Gaps
-
-The library is buildable as an Arduino package in this repository, but some
-cleanup still remains:
-
-- some internal implementation names should still be simplified
-- Nicla Vision still needs hardware validation in this repository
-- CI and release automation are not added yet

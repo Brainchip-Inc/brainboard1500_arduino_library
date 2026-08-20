@@ -254,7 +254,7 @@ const akida::ProgramInfo* AkidaNicla::programInfo() const {
 AKD1500Options AKD1500Options::niclaVisionDefaults() {
   AKD1500Options options;
   options.akidaCsPin = 7u;
-  options.bridgeCsPin = 1u;
+  options.bridgeCsPin = 3u;
   // The Nicla Vision demo path is dominated by host-to-AKD input upload, and
   // 8 MHz is a validated stable setting on connected hardware.
   options.spiClockHz = 8000000u;
@@ -913,9 +913,21 @@ bool AkidaNicla::stageModelToFlash(const AKD1500Options& options,
   akida_port::AKD1500BoardConfig config = make_board_config(options);
   config.external_program_data_address =
       normalize_external_model_address(address_or_offset);
-  return akida_port::stage_program_data_to_bridge_flash(
+  if (Serial) {
+    Serial.print("[AKD1500][flash_wrap] stage begin size=");
+    Serial.print(static_cast<unsigned long>(serialized_program_size));
+    Serial.print(" addr=0x");
+    Serial.println(
+        static_cast<unsigned long>(config.external_program_data_address), HEX);
+  }
+  const bool ok = akida_port::stage_program_data_to_bridge_flash(
       config, serialized_program, serialized_program_size,
       config.external_program_data_address);
+  if (Serial) {
+    Serial.print("[AKD1500][flash_wrap] stage result=");
+    Serial.println(ok ? "PASS" : "FAIL");
+  }
+  return ok;
 }
 
 bool AkidaNicla::verifyModelInFlash(const uint8_t* serialized_program,
@@ -933,9 +945,21 @@ bool AkidaNicla::verifyModelInFlash(const AKD1500Options& options,
   akida_port::AKD1500BoardConfig config = make_board_config(options);
   config.external_program_data_address =
       normalize_external_model_address(address_or_offset);
-  return akida_port::verify_program_data_from_bridge_flash(
+  if (Serial) {
+    Serial.print("[AKD1500][flash_wrap] verify begin size=");
+    Serial.print(static_cast<unsigned long>(serialized_program_size));
+    Serial.print(" addr=0x");
+    Serial.println(
+        static_cast<unsigned long>(config.external_program_data_address), HEX);
+  }
+  const bool ok = akida_port::verify_program_data_from_bridge_flash(
       config, serialized_program, serialized_program_size,
       config.external_program_data_address);
+  if (Serial) {
+    Serial.print("[AKD1500][flash_wrap] verify result=");
+    Serial.println(ok ? "PASS" : "FAIL");
+  }
+  return ok;
 }
 
 const char* AkidaNicla::statusName(AKD1500Status status) {
@@ -1015,7 +1039,7 @@ uint32_t normalize_external_model_address(uint32_t address_or_offset) {
 AKD1500Options AKD1500Options::niclaVisionDefaults() {
   AKD1500Options options;
   options.akidaCsPin = 7u;
-  options.bridgeCsPin = 1u;
+  options.bridgeCsPin = 3u;
   options.spiClockHz = 8000000u;
   options.flashSpiClockHz = 2000000u;
   options.externalModelAddress = kExternalModelAliasBase;

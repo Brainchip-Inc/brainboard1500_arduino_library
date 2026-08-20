@@ -24,8 +24,7 @@ class PioExpander6408;
 
 struct BB15Pins {
   uint8_t akidaCs = 7u;
-  uint8_t bridgeCs = 1u;
-  uint8_t proceed = 2u;
+  uint8_t ttModeCs = 1u;
   uint8_t interrupt = 0u;
 };
 
@@ -76,7 +75,7 @@ struct BB15Config {
   const char* forcedFlashProfile = nullptr;
   bool assumeForcedFlashProfileReady = false;
 
-  static BB15Config niclaVisionDefaults();
+  static BB15Config defaults();
 };
 
 enum class BB15Status {
@@ -254,6 +253,7 @@ class BB15 {
   bool ensureLowLevelBoard();
   uint32_t normalizeAddress(uint32_t address_or_offset) const;
   uint32_t logicalFlashOffset(uint32_t address_or_offset) const;
+  void prepareHostSpiPinsForAkidaAccess();
   bool ensureWireStarted();
   bool ensureExpander();
   void initializeConstructorResetState();
