@@ -1,36 +1,41 @@
 # Examples
 
-This library ships with four board bring-up/runtime sketches and one Nicla
-Vision camera demo:
+This library includes examples for Arduino Nicla Sense ME and Arduino Nicla
+Vision.
 
 - `bb15_model_flasher_nicla_sense`
+  Flashes the bundled model to BB15 external flash from Nicla Sense ME.
+
 - `bb15_dummy_inference_nicla_sense`
+  Loads the flashed model and runs synthetic interrupt-driven inference on Nicla
+  Sense ME.
+
 - `bb15_model_flasher_nicla_vision`
+  Flashes the bundled Visual Wake Words person-detection model to BB15 external
+  flash from Nicla Vision.
+
 - `bb15_dummy_inference_nicla_vision`
+  Loads the flashed model and runs synthetic interrupt-driven inference on Nicla
+  Vision.
+
 - `bb15_nicla_vision_human_detection`
+  Captures live frames from the Nicla Vision camera, runs person detection on
+  BB15, and streams a grayscale preview and inference results over USB.
 
-The two flasher sketches are the first-step examples. They flash one exported
-Akida model into BB15 external flash, verify it, and confirm that the runtime
-can load the model back.
+## Nicla Vision Human Detection
 
-The two dummy inference sketches are the follow-up examples. They load the
-flashed model from BB15 external flash and run interrupt-driven synthetic
-inference so users can validate the runtime path before adding a real sensor or
-camera source.
+Upload `bb15_model_flasher_nicla_vision` first to install the bundled VWW
+person-detection model. Then upload `bb15_nicla_vision_human_detection`.
 
-All five sketches are intended to be user-facing examples. They should stay
-readable, self-contained, and explicit about which host board they target.
-
-`bb15_nicla_vision_human_detection` is the live-camera follow-up for Nicla
-Vision. First upload `bb15_model_flasher_nicla_vision`, which flashes the
-bundled VWW person-detection model. Then upload the camera sketch and run:
+Start the desktop preview:
 
 ```bash
 python3 -m pip install -r tools/requirements.txt
 python3 tools/bb15_nicla_vision_preview.py --port /dev/ttyACM0
 ```
 
-Replace `/dev/ttyACM0` with the serial port assigned by your operating system.
-The camera demo loads the existing flash model and never modifies it. It keeps
-camera capture, preprocessing, USB streaming, and completion interrupts local
-to the sketch; the BB15 library API remains hardware-focused.
+Replace `/dev/ttyACM0` with the serial port used by your board.
+
+The camera demo captures RGB565 video at `320x240`, sends a grayscale preview
+over USB CDC, and prepares a rotated `96x96x3` RGB input for the flashed VWW
+model.
