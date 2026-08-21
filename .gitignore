@@ -2,6 +2,7 @@ build/
 dist/
 .arduino/
 docs/
+__pycache__/
 *.o
 *.a
 *.elf

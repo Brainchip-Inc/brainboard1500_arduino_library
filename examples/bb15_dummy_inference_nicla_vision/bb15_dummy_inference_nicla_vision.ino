@@ -16,7 +16,7 @@ constexpr uint32_t kAkidaSpiClockHz = 25000000u;
 constexpr uint32_t kFlashSpiClockHz = 2000000u;
 constexpr uint16_t kModelWidth = 96u;
 constexpr uint16_t kModelHeight = 96u;
-constexpr uint16_t kModelChannels = 1u;
+constexpr uint16_t kModelChannels = 3u;
 constexpr uint8_t kExpanderInterruptPin = 2u;
 constexpr uint8_t kAkidaInterruptPadIndex = 3u;
 constexpr uint8_t kExpanderRegDirection = 0x03u;
@@ -41,7 +41,10 @@ constexpr size_t kModelInputBytes =
     static_cast<size_t>(kModelWidth) * kModelHeight * kModelChannels;
 constexpr const char* kSketchName = "bb15_dummy_inference_nicla_vision";
 constexpr const char* kLogPrefix = "[bb15_dummy_inference_nicla_vision]";
-constexpr const char* kBundledModelName = "presence_regular_96_gray";
+// Keep this synthetic-input sketch compatible with the model installed by the
+// Nicla Vision flasher and used by the live-camera demo.
+constexpr const char* kBundledModelName =
+    "NiclaV_VWW_PersonDet_EN_USBbottom_2026-06-14";
 
 bool g_ready = false;
 const char* g_last_failure_stage = nullptr;
@@ -238,14 +241,19 @@ void print_model_summary() {
 void build_demo_input(uint32_t pass_index) {
   for (uint16_t y = 0u; y < kModelHeight; ++y) {
     for (uint16_t x = 0u; x < kModelWidth; ++x) {
-      const size_t index = static_cast<size_t>(y) * kModelWidth + x;
+      const size_t index =
+          (static_cast<size_t>(y) * kModelWidth + x) * kModelChannels;
       const uint16_t stripe = static_cast<uint16_t>((x / 12u) + (y / 12u));
       const uint8_t base =
           ((stripe + static_cast<uint16_t>(pass_index)) & 1u) != 0u ? 208u : 32u;
       const uint8_t diagonal =
           ((x + y + static_cast<uint16_t>(pass_index * 3u)) % 29u) == 0u ? 255u
                                                                            : base;
+      // Make a valid RGB input while preserving a changing synthetic pattern
+      // for users who want to verify the interrupt/completion path first.
       g_input[index] = diagonal;
+      g_input[index + 1u] = static_cast<uint8_t>(255u - diagonal);
+      g_input[index + 2u] = base;
     }
   }
 }

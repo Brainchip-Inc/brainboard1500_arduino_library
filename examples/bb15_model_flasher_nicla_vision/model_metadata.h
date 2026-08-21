@@ -1,8 +1,8 @@
 #ifndef AKIDA_MODEL_METADATA_H_
 #define AKIDA_MODEL_METADATA_H_
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
 extern const char akida_model_path[];
 extern const char akida_model_ip_version[];

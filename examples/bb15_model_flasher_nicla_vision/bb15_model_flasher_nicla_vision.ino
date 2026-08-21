@@ -40,7 +40,12 @@ constexpr uint32_t kAkidaSpiClockHz = 25000000u;
 constexpr uint32_t kFlashSpiClockHz = 2000000u;
 constexpr const char* kSketchName = "bb15_model_flasher_nicla_vision";
 constexpr const char* kLogPrefix = "[bb15_model_flasher_nicla_vision]";
-constexpr const char* kBundledModelName = "presence_regular_96_gray";
+// This Vision flasher installs the model used by
+// `bb15_nicla_vision_human_detection`. Keep its asset files in sync with that
+// sketch: the inference example deliberately only loads an already-flashed
+// model and never modifies external flash.
+constexpr const char* kBundledModelName =
+    "NiclaV_VWW_PersonDet_EN_USBbottom_2026-06-14";
 
 bool g_flash_ok = false;
 const char* g_last_failure_stage = nullptr;
