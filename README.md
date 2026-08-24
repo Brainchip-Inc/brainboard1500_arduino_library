@@ -143,3 +143,15 @@ Validation status as of August 21, 2026:
   Public library code and internal runtime support owned by this package.
 - `examples/`
   The supported user-facing sketches.
+
+## Licensing
+
+This project is licensed under the MIT License. See `LICENSE`.
+
+This repository also bundles third-party components that are distributed
+under the Apache License, Version 2.0, including the vendored FlatBuffers
+headers under `src/flatbuffers/`. A copy of that license is in
+`LICENSE-APACHE-2.0`.
+
+`NOTICE` lists every copyright and license statement found in this tree,
+the paths each one covers, and the files that carry no such statement.
