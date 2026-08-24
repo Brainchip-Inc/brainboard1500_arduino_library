@@ -23,6 +23,7 @@ class PioExpander6408;
 }
 
 struct BB15Pins {
+  uint8_t boardReset = 10u;
   uint8_t akidaCs = 7u;
   uint8_t ttModeCs = 1u;
   uint8_t interrupt = 0u;
@@ -40,8 +41,8 @@ struct BB15ResetPin {
 
 struct BB15ExpanderPins {
   uint8_t bootMode = 0u;
-  uint8_t akidaSleep = 2u;
-  uint8_t akidaInterrupt = 1u;
+  uint8_t akidaSleep = 3u;
+  uint8_t akidaInterrupt = 2u;
 };
 
 struct BB15Pinout {
@@ -213,6 +214,8 @@ class BB15 {
   bool setAkidaReset(bool asserted);
   bool holdAkidaInReset();
   bool releaseAkidaReset();
+  bool holdBoardInReset();
+  bool releaseBoardReset();
   bool powerDown();
   bool powerUp();
   bool sleep();
@@ -254,6 +257,7 @@ class BB15 {
   uint32_t normalizeAddress(uint32_t address_or_offset) const;
   uint32_t logicalFlashOffset(uint32_t address_or_offset) const;
   void prepareHostSpiPinsForAkidaAccess();
+  void setBoardReset(bool asserted);
   bool ensureWireStarted();
   bool ensureExpander();
   void initializeConstructorResetState();

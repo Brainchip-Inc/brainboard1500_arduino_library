@@ -212,26 +212,28 @@ BB15Config BB15Config::defaults() {
 
 BB15Pinout BB15Pinout::niclaVisionDefaults() {
   BB15Pinout pinout;
+  pinout.host.boardReset = 16u;
   pinout.host.akidaCs = 7u;
   pinout.host.ttModeCs = 3u;
   pinout.host.interrupt = 0u;
   pinout.akidaReset.route = BB15ResetRoute::Expander;
   pinout.akidaReset.pin = 4u;
   pinout.expander.bootMode = 0u;
-  pinout.expander.akidaSleep = 1u;
+  pinout.expander.akidaSleep = 3u;
   pinout.expander.akidaInterrupt = 2u;
   return pinout;
 }
 
 BB15Pinout BB15Pinout::niclaSenseMeDefaults() {
   BB15Pinout pinout;
+  pinout.host.boardReset = 10u;
   pinout.host.akidaCs = 6u;
   pinout.host.ttModeCs = 0u;
   pinout.host.interrupt = 5u;
   pinout.akidaReset.route = BB15ResetRoute::Expander;
   pinout.akidaReset.pin = 4u;
   pinout.expander.bootMode = 0u;
-  pinout.expander.akidaSleep = 1u;
+  pinout.expander.akidaSleep = 3u;
   pinout.expander.akidaInterrupt = 2u;
   return pinout;
 }
@@ -376,7 +378,15 @@ void BB15::prepareHostSpiPinsForAkidaAccess() {
   digitalWrite(pinout_.host.ttModeCs, HIGH);
 }
 
+void BB15::setBoardReset(bool asserted) {
+  pinMode(pinout_.host.boardReset, OUTPUT);
+  digitalWrite(pinout_.host.boardReset, asserted ? LOW : HIGH);
+}
+
 void BB15::initializeConstructorResetState() {
+  // Release the active-low board reset before accessing its I2C expander.
+  setBoardReset(false);
+
   if (pinout_.akidaReset.route == BB15ResetRoute::HostGpio) {
     pinMode(pinout_.akidaReset.pin, OUTPUT);
     digitalWrite(pinout_.akidaReset.pin, HIGH);
@@ -474,21 +484,31 @@ bool BB15::releaseAkidaReset() {
   return true;
 }
 
-bool BB15::powerDown() {
+bool BB15::holdBoardInReset() {
   initialized_ = false;
   s2m_active_ = false;
   ip_version_ = 0u;
   detected_flash_jedec_ = 0u;
   detected_flash_name_ = "unknown";
   has_supported_flash_profile_ = false;
-  return holdAkidaInReset();
+  setBoardReset(true);
+  last_error_ = make_error(BB15Status::Ok, "ok");
+  return true;
+}
+
+bool BB15::releaseBoardReset() {
+  setBoardReset(false);
+  delay(config_.resetReleaseSettleMs);
+  last_error_ = make_error(BB15Status::Ok, "ok");
+  return true;
+}
+
+bool BB15::powerDown() {
+  return holdBoardInReset();
 }
 
 bool BB15::powerUp() {
-  initialized_ = false;
-  s2m_active_ = false;
-  ip_version_ = 0u;
-  return releaseAkidaReset();
+  return releaseBoardReset();
 }
 
 bool BB15::sleep() {
@@ -528,6 +548,9 @@ bool BB15::setAkidaSleep(bool enabled) {
 }
 
 bool BB15::enterExternalFlashBootMode() {
+  if (!releaseBoardReset()) {
+    return false;
+  }
   if (!configureExpanderDefaults()) {
     return false;
   }
@@ -826,6 +849,9 @@ void BB15::printLastError(Print& out) const {
 
 void BB15::printSummary(Print& out) const {
   out.println("board=BB15");
+  out.print("pins board_reset=");
+  out.print(pinout_.host.boardReset);
+  out.print(" ");
   out.print("expander=0x");
   out.println(config_.expanderAddress, HEX);
   out.print("pins akida_reset=");

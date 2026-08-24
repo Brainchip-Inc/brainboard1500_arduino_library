@@ -26,6 +26,20 @@ void setup() {
 Construct `BB15` once `setup()` is running. Do not create it as a global
 object, because the constructor touches board hardware state.
 
+## Reset And Sleep Control
+
+The standard pinouts define separate controls for the complete BB15 board and
+the Akida device:
+
+- `powerDown()` holds the full BB15 board reset through the host reset pin.
+- `powerUp()` releases the full BB15 board reset.
+- `holdAkidaInReset()` and `releaseAkidaReset()` control only the Akida reset
+  through expander P4.
+- `sleep()` and `wake()` control Akida sleep through expander P3.
+
+After `powerUp()` or `wake()`, call `begin()` and `BB15Runner::begin()` before
+running inference.
+
 ## Supported Hosts
 
 The current target hosts are:
