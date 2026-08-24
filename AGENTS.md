@@ -34,6 +34,48 @@ git log --oneline HEAD..upstream/main   # review what is coming
 git merge upstream/main
 ```
 
+### Basing a pull request that goes TO upstream
+
+An approved upstream pull request must be branched from `upstream/main`, never from `main`. A pull request
+carries every commit in the head branch that is not in the base, so a `main`-based branch offers Neuromorphyx
+all of BrainChip's fork-only work along with the change: this file, `CLAUDE.md`,
+`.github/copilot-instructions.md`, and whatever else has landed on `main` since the last upstream sync. It only
+grows worse over time.
+
+```sh
+git checkout -b feat/my-example main            # WRONG
+git fetch upstream
+git checkout -b feat/my-example upstream/main   # RIGHT
+```
+
+Work still happens on `main`, where the conventions and tooling live. When a change is ready to go upstream,
+cherry-pick just its commits onto a fresh `upstream/main`-based branch:
+
+```sh
+git fetch upstream
+git checkout -b feat/my-example upstream/main
+git cherry-pick <sha>...        # only the commits for this change
+```
+
+This is why the commit discipline below matters: a demo committed as one focused commit touching only its own
+`examples/<name>/` folder lifts across in a single cherry-pick, while work bundled with unrelated edits has to
+be dissected under pressure.
+
+Verify before opening the pull request, so a mistake is caught while it is still private:
+
+```sh
+git log --oneline upstream/main..HEAD     # must show ONLY your intended commits
+git diff --name-only upstream/main...HEAD # must show ONLY your intended files
+```
+
+Then push and open it cross-repo, with the target passed explicitly as above:
+
+```sh
+git push origin feat/my-example
+gh pr create --repo Neuromorphyx/BrainBoard1500_arduino_library \
+  --base main --head Brainchip-Inc:feat/my-example
+```
+
 ## Commit message format
 
 BrainChip work uses [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description`.
