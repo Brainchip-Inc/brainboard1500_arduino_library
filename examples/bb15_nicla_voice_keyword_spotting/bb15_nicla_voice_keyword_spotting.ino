@@ -7,59 +7,40 @@
 #include "model_metadata.h"
 #include "program.h"
 
-// nicla_voice and nicla_sense share the Arduino NICLA variant, so this guard
-// can only reject other families. Building this for Nicla Sense ME compiles but
-// fails at NDP.begin(), because that board has no NDP120.
+// nicla_voice and nicla_sense share the NICLA variant, so this rejects other
+// families only.
 #ifndef ARDUINO_NICLA
 #error "bb15_nicla_voice_keyword_spotting requires Arduino Nicla Voice."
 #endif
 
 namespace {
 
-// This example owns microphone capture, block framing and USB framing. The
-// Nicla Voice microphone reaches the NDP120 only, never the nRF52832, so the
-// bundled NDP library is the single route to audio (Nicla Voice datasheet
-// section 4.7). BB15 inference arrives in a later stage of this demo.
 constexpr uint32_t kSerialBaud = 921600u;
 constexpr uint32_t kBootSettleMs = 250u;
 
-// A board that is waiting for a stream used to say nothing at all, which makes
-// it indistinguishable from a dead one to anything that is only listening. It
-// now reports itself on this interval instead, so a plain terminal is enough to
-// tell a healthy idle board from a wedged one, and so a setup failure is
-// visible without having to ask for it at the right moment.
+// So a listener can tell an idle board from a wedged one.
 constexpr uint32_t kIdleReportMs = 2000u;
 
-// The NDP120 firmware packages already stored in the board's on-board QSPI
-// flash. All three are required: with only the MCU and DSP packages loaded the
-// audio holding tank never advances, so extractData keeps returning the same
-// stale chunk. The neural-network package carries the DSP audio flow
-// configuration that starts the tank; this demo uses none of its classes.
+// Already in the board's QSPI flash.
 constexpr const char* kNdpMcuFirmware = "mcu_fw_120_v90.synpkg";
 constexpr const char* kNdpDspFirmware = "dsp_firmware_v90.synpkg";
 constexpr const char* kNdpAudioFlowPackage =
     "alexa_334_NDP120_B0_v11_v90.synpkg";
 
-// The NDP120 publishes one 24 ms chunk of 16 kHz mono PCM at a time and holds
-// it until the next one replaces it, so polling must be paced: too slow loses
-// audio, too fast burns SPI time re-reading a chunk already taken. Each chunk
-// carries a four-byte annotation after the samples whose third byte is a
-// monotonic counter, which is what makes a fresh chunk recognizable.
+// The NDP120 holds one 24 ms chunk of 16 kHz mono PCM until the next replaces
+// it. The third byte of each chunk's trailing annotation is a monotonic
+// counter.
 constexpr size_t kChunkBufferBytes = 1024u;
 constexpr size_t kAnnotationBytes = 4u;
 constexpr size_t kAnnotationCounterOffset = 2u;
 constexpr uint32_t kChunkPeriodMs = 24u;
 constexpr uint32_t kChunkPollLeadMs = 3u;
 constexpr uint32_t kChunkRetryMs = 2u;
-// A single failed read is unremarkable. A run of them is a real transport fault
-// worth telling the desktop tool about, rather than leaving it to guess from a
-// stalled view.
+// One failed read is unremarkable; a run of them is reported as a fault.
 constexpr uint8_t kChunkFailureLimit = 25u;
 
-// Front-end values taken from spark and hard-coded here on purpose: this demo
-// has no parameter surface. Sample rate, hop and block size come from
-// spark/source/Kconfig (SAMPLING_RATE, MFCC_SAMPLE_COUNT, AUDIO_BLOCK_MS); the
-// gating and decision values come from spark/source/core/common/kws_config.c.
+// spark's values: rates from its source/Kconfig, the rest from
+// source/core/common/kws_config.c.
 constexpr uint32_t kSampleRateHz = 16000u;
 constexpr uint16_t kMfccHopSamples = 320u;
 constexpr uint16_t kBlockSamples = 960u;
@@ -67,12 +48,8 @@ constexpr uint8_t kMfccFramesPerBlock = kBlockSamples / kMfccHopSamples;
 constexpr uint16_t kSpectrogramFrames = 49u;
 constexpr uint8_t kSpectrogramCoefficients = 10u;
 constexpr uint8_t kClassCount = 12u;
-// Inference runs every third block, about every 180 ms, from spark's
-// g_inference_period in source/core/common/audio/audio_processor.c where
-// ap_counter counts blocks. It is deliberately not once per MFCC frame.
 constexpr uint8_t kInferencePeriodBlocks = 3u;
-// spark's info.yaml for this model: the classifier reports silence and unknown
-// like any other class, and neither can trigger a detection.
+// Reported like any other class, but neither can trigger a detection.
 constexpr uint8_t kSilenceClass = 10u;
 constexpr uint8_t kUnknownClass = 11u;
 constexpr uint16_t kRmsThreshold = 550u;
@@ -84,41 +61,26 @@ constexpr float kScoreThreshold = 0.50f;
 constexpr uint16_t kDebounceMs = 300u;
 constexpr uint8_t kChimingThreshold = 3u;
 
-// Quantization of an MFCC coefficient to the model's uint8 input, from
-// do_inference() in spark/source/apps/demo_apps/main.cpp: clamp to 0..255 then
-// truncate. The full-scale divisor is the model's own, from
-// spark/source/external/model_files/kws/kws/info.yaml, and is not a tuning
-// knob. It matches this front end: a silent frame gives coefficient 0 of
-// -123.569649, so silence lands one step below zero on the model's scale.
+// Divides an MFCC coefficient down to the model's uint8 input, as spark's
+// do_inference() does. The value is the model's own, from its info.yaml, and is
+// not a tuning knob.
 constexpr float kMfccFullScale = 123.56967163085938f;
 
-// spark clears its spectrogram to float zero, which quantizes to 128 rather
-// than to 0, so a cleared ring here has to hold 128 to feed the model the same
-// bytes spark would.
+// spark clears a float spectrogram, and float zero quantizes to 128, so a
+// cleared ring holds 128 to feed the model the bytes spark would.
 constexpr uint8_t kClearedFeature = 128u;
 
-// BB15 transport. The header lines run through the Nicla Voice's TXB0108
-// translators, which are weak drivers, so this demo clocks the Akida SPI more
-// slowly than the Nicla Vision demo does.
 constexpr uint32_t kAkidaSpiClockHz = 8000000u;
 
-// spark's DC blocking high-pass, from dc_block_process() in
-// spark/source/core/interface/audio/pdm_mic.c. Its output is what spark takes
-// the RMS of and what it feeds the MFCC, so the RMS threshold above only means
-// the same thing here if the same filter runs first.
+// spark's DC blocker coefficient, from its dc_block_process().
 constexpr int32_t kDcBlockAlphaQ15 = 32700;
 
-// One min/max pair per 10 samples. spark sends the same shape of envelope to
-// its phone app, at 32 pairs per block; the extra resolution here is affordable
-// because this link is a 921600 baud UART rather than BLE.
+// One min/max pair per 10 samples of the block.
 constexpr uint16_t kWaveformPoints = 96u;
 constexpr uint16_t kWaveformWindowSamples = kBlockSamples / kWaveformPoints;
 
-// USB protocol v1. The header is the one the Nicla Vision human-detection demo
-// defines: "BB15", version, type, payload size (uint32 little-endian). The
-// three host commands are identical; the two device message types are new so a
-// mismatched desktop tool fails to recognize them instead of misreading a
-// camera payload as audio.
+// USB protocol v1: the Nicla Vision human-detection demo's header and commands,
+// with message types of its own for audio.
 constexpr uint8_t kProtocolMagic[] = {'B', 'B', '1', '5'};
 constexpr uint8_t kProtocolVersion = 1u;
 enum class PacketType : uint8_t {
@@ -137,17 +99,14 @@ constexpr size_t kAudioResultMetadataBytes = 28u;
 constexpr uint8_t kNoPrediction = 0xFFu;
 constexpr uint8_t kStatusOk = 0u;
 
-// Status values for the error packet. A chunk-capture failure reports the
-// Syntiant interface library's own code, which is a small positive, so setup
-// failures take a range of their own.
+// Above the small positive range the Syntiant library uses for its own errors,
+// which a chunk-capture failure reports verbatim.
 constexpr uint8_t kStatusMfccInitFailed = 0x81u;
 constexpr uint8_t kStatusMicrophoneFailed = 0x82u;
 constexpr uint8_t kStatusAkidaFailed = 0x83u;
 constexpr uint8_t kReservedByte = 0u;
 
-// From spark's kws_new_tags[] in
-// source/apps/demo_apps/sample_input/kws/kws_inputs.cpp, which agrees with the
-// silence and unknown class indices in the model's info.yaml.
+// spark's kws_new_tags[], in the order the model's info.yaml gives.
 constexpr const char* kClassLabels[kClassCount] = {
     "down",  "go",   "left", "no",  "off",     "on",
     "right", "stop", "up",   "yes", "silence", "unknown"};
@@ -155,8 +114,7 @@ constexpr const char* kClassLabels[kClassCount] = {
 constexpr const char* kSketchName = "bb15_nicla_voice_keyword_spotting";
 constexpr const char* kLogPrefix = "[bb15_nicla_voice_keyword_spotting]";
 
-/** @brief One completed 60 ms audio block, ready to stream to the desktop tool.
- */
+/** @brief One completed 60 ms audio block, ready to stream to the host. */
 struct AudioBlock {
   uint32_t sequence = 0u;
   uint32_t deviceMs = 0u;
@@ -180,8 +138,8 @@ struct Classifier {
   uint32_t lastTriggerMs = 0u;
   uint8_t blocksSinceInference = 0u;
   uint8_t predicted = kNoPrediction;
-  // Wraps, and only ever increments, so the desktop tool can tell a fresh
-  // detection from the same keyword still being displayed.
+  // Only ever increments, and wraps, so the desktop tool can tell a fresh
+  // detection from the same keyword still on screen.
   uint8_t detections = 0u;
   uint16_t inferMs = 0u;
 };
@@ -205,15 +163,12 @@ struct DcBlockState {
 };
 
 alignas(4) uint8_t g_chunk[kChunkBufferBytes];
-// spark's mfcc_process_input() layout: [0, hop) keeps the last hop of the
-// previous block and [hop, hop + block) holds this one. Each MFCC window is two
-// hops wide and steps by one hop, so a 60 ms block yields exactly three frames
-// and the final window ends at the buffer end.
+// spark's mfcc_process_input() layout: [0, hop) is the previous block's last
+// hop, [hop, hop + block) is this one.
 int16_t g_mfcc_input[kMfccHopSamples + kBlockSamples];
 int16_t g_waveform[2u * kWaveformPoints];
-// The model's input, held quantized because that is the only form it is used
-// in. g_spectrogram_index is the write position, which is also the oldest
-// frame, so the model input unrolls from it.
+// Held quantized, the only form the model uses. g_spectrogram_index is the
+// write position, and so also the oldest frame the unroll starts from.
 uint8_t g_spectrogram[kSpectrogramFrames * kSpectrogramCoefficients];
 uint16_t g_spectrogram_index = 0u;
 uint8_t g_new_features[kMfccFramesPerBlock * kSpectrogramCoefficients];
@@ -232,8 +187,7 @@ BB15Config g_config = []() {
 BB15* g_bb15 = nullptr;
 BB15Runner* g_runner = nullptr;
 BB15Model g_model(program, static_cast<size_t>(program_len));
-// Per-neuron dequantization, read out of the program itself rather than
-// hard-coded, so a re-exported model cannot leave stale constants behind.
+// Read from the program itself rather than hard-coded.
 const int32_t* g_output_shifts = nullptr;
 const float* g_output_scales = nullptr;
 DcBlockState g_dc_block;
@@ -248,9 +202,8 @@ uint32_t g_next_chunk_poll_ms = 0u;
 uint16_t g_dropped_chunks = 0u;
 uint32_t g_sequence = 0u;
 bool g_streaming = false;
-// Set when setup could not finish. The board then answers host commands with
-// the reason instead of going quiet, because a setup message printed once at
-// boot is gone by the time a desktop tool opens the port.
+// Set when setup could not finish, so host commands are answered with the
+// reason.
 uint8_t g_setup_failure = kStatusOk;
 uint32_t g_next_idle_report_ms = 0u;
 
@@ -425,9 +378,8 @@ void send_audio_result_packet(const AudioBlock& block) {
 /**
  * @brief Read at most one host command from the serial input.
  *
- * Commands are zero-payload packets. Parsing byte by byte lets the boot banner
- * and the NDP library's own progress output pass through harmlessly when they
- * are still buffered as the desktop tool opens the port.
+ * Parsing byte by byte lets the boot banner and the NDP library's own output
+ * pass through harmlessly when a tool opens the port while they are buffered.
  *
  * @return The command received, or type 0 when no complete command is pending.
  */
@@ -470,9 +422,8 @@ PacketType poll_host_command() {
 /**
  * @brief Apply spark's DC blocking high-pass to captured samples in place.
  *
- * The filter is a first-order IIR carrying state between calls, so filtering
- * the stream in 24 ms chunks gives the same result as spark filtering it in
- * 60 ms blocks.
+ * The filter state carries between calls, so a chunk boundary does not reset
+ * it.
  *
  * @param samples  Samples to filter, overwritten with the filtered signal.
  * @param count    Number of samples to filter.
@@ -572,10 +523,7 @@ uint16_t extract_features() {
  * @brief Turn the raw Akida potentials into the dequantized values spark
  *        softmaxes.
  *
- * The engine's own formula, from HardwareDeviceImpl::dequantize(): each
- * neuron's potential has its shift subtracted and is divided by its scale.
- * spark reaches the same numbers through akida_predict(), which dequantizes
- * before returning; this library hands back the potentials instead.
+ * The engine's own formula, from HardwareDeviceImpl::dequantize().
  *
  * @param potentials  kClassCount raw potentials from the runner.
  * @param out         Receives the dequantized values.
@@ -614,9 +562,8 @@ void softmax_in_place(float* values) {
 /**
  * @brief Say whether spark's post-detection cooldown has expired.
  *
- * From is_kws_debounce_complete() in spark's main.cpp. While it has not, spark
- * skips the whole front end, which is why this gates the block before the RMS
- * is even looked at.
+ * From is_kws_debounce_complete() in spark's main.cpp. spark skips its whole
+ * front end while the cooldown runs, so this gates a block before its RMS.
  *
  * @return True when audio may be processed again.
  */
@@ -656,11 +603,8 @@ void build_model_input() {
 /**
  * @brief Apply spark's decision logic to one set of smoothed scores.
  *
- * kws_post_processing() in spark's main.cpp: a class at or above the score
- * threshold advances its chiming counter and anything below resets it, silence
- * and unknown can never trigger, and the highest scoring class to reach the
- * chiming threshold fires. A detection starts the debounce cooldown and throws
- * the accumulated state away.
+ * kws_post_processing() in spark's main.cpp. A class fires once it has held
+ * above the score threshold for kChimingThreshold consecutive inferences.
  */
 void apply_decision() {
   uint8_t triggered = kNoPrediction;
@@ -727,20 +671,17 @@ bool run_inference() {
 /**
  * @brief Decide whether this block's audio should reach the MFCC front end.
  *
- * spark's rule, from audio_process_thread() in
- * spark/source/core/common/audio/audio_processor.c. A block at or above the RMS
- * threshold is speech and restarts the timer. A quieter block is still
- * processed while the utterance is within kSpeechActiveTimeMs of its last loud
- * block, which is what captures the tail of a word; the first quiet block past
- * that returns to idle and throws the part-built model input away.
+ * spark's rule, from its audio_process_thread(). A loud block restarts the
+ * timer, and a quiet one is still processed for kSpeechActiveTimeMs after the
+ * last loud block, which is what captures the tail of a word.
  *
  * @param rms  This block's RMS, taken after the DC blocker as spark does.
  * @return True when the block should be turned into features.
  */
 bool gate_block(uint16_t rms) {
   if (!debounce_complete()) {
-    // spark skips the whole front end during the cooldown, so a detection is
-    // not immediately re-triggered by the tail of the same word.
+    // Idle, not merely ungated: the cooldown must not leave a stale utterance
+    // timer that the tail of the same word could walk straight back into.
     g_speech_state = SpeechState::Idle;
     return false;
   }
@@ -781,8 +722,8 @@ void publish_filled_block() {
     }
   }
   block.speechActive = g_speech_state == SpeechState::Active;
-  // The overlap advances whether or not the block became features, or the next
-  // window would splice this block onto one that is already 60 ms stale.
+  // Advances whether or not the block became features, or the next window
+  // would splice this block onto one already 60 ms stale.
   memcpy(&g_mfcc_input[0], &g_mfcc_input[kBlockSamples],
          kMfccHopSamples * sizeof(int16_t));
 
@@ -827,10 +768,8 @@ void accumulate_samples(const int16_t* samples, size_t count) {
 /**
  * @brief Take the next microphone chunk from the NDP120 when one is due.
  *
- * Polls just before the next chunk is expected and retries quickly until the
- * annotation counter changes, so each chunk is taken exactly once. A gap in
- * that counter is counted as dropped audio, which is what lets the desktop tool
- * show whether the stream stayed continuous.
+ * Polls just before a chunk is due and retries until the annotation counter
+ * changes, so each is taken once and a gap in it counts as dropped audio.
  *
  * @return True when a fresh chunk was consumed.
  */
@@ -862,9 +801,7 @@ bool capture_fresh_chunk() {
   g_last_chunk_counter = counter;
   g_next_chunk_poll_ms = millis() + kChunkPeriodMs - kChunkPollLeadMs;
 
-  // Take audio only once two consecutive chunks confirm the stream is being
-  // kept up with, so a stream start costs at most two discarded chunks instead
-  // of reporting the tank's backlog as dropped audio.
+  // Two consecutive chunks confirm the stream is being kept up with.
   if (g_chunk_sync != ChunkSync::Running) {
     g_chunk_sync = g_chunk_sync == ChunkSync::Seeded && advance == 1u
                        ? ChunkSync::Running
@@ -904,11 +841,6 @@ void reset_capture_state() {
 
 /**
  * @brief Bring BB15 up, load the keyword model and read its dequantization.
- *
- * The model is kept in host memory rather than BB15 external flash: it is
- * 22 KB against 400 KB of free program space, so it costs flash this sketch
- * has and saves a flashing step, a companion sketch and a failure mode. The
- * Nicla Vision demo makes the opposite choice because its model is 184 KB.
  *
  * @return True when the runtime is ready to infer.
  */
@@ -956,15 +888,14 @@ bool prepare_microphone() {
 
 void setup() {
   Serial.begin(kSerialBaud);
-  // nicla::disableLDO() must not be called here, unlike in the NDP library's
-  // own audio examples. That LDO is the PMIC load switch feeding VDDIO_EXT,
-  // which supplies the TXB0108 level translators on every header pin (Nicla
-  // Voice datasheet section 4.9), so disabling it cuts off an attached BB15.
+  // Never call nicla::disableLDO() here, as the NDP library's own audio
+  // examples do: that LDO feeds VDDIO_EXT, which supplies the level
+  // translators on every header pin, so disabling it cuts off BB15.
   nicla::begin();
   nicla::leds.begin();
   set_led(blue);
-  // Serial here is a UART bridged to USB by the on-board SAMD11, not a native
-  // USB device, so it is ready immediately and only the host needs a moment.
+  // Serial is a UART bridged to USB by the SAMD11, not a native USB device, so
+  // only the host needs a moment.
   delay(kBootSettleMs);
 
   Serial.println();
@@ -1013,8 +944,8 @@ void setup() {
 void loop() {
   const PacketType command = poll_host_command();
   if (g_setup_failure != kStatusOk) {
-    // Keep answering, so a tool that connects long after boot is told why the
-    // board has nothing to stream rather than being left to guess.
+    // Keep answering, so a tool connecting long after boot is told why there is
+    // nothing to stream.
     if (command != static_cast<PacketType>(0u)) {
       send_error_packet(g_setup_failure);
     }

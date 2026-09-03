@@ -21,21 +21,17 @@ constexpr int kMelHighFreqHz = 4000;
 constexpr double kTwoPi = 6.283185307179586476925286766559005;
 constexpr double kPi = kTwoPi / 2;
 
-// Bins the real FFT produces, and the count the filterbank scans. spark's
-// create_mel_fbank() stops one short of the end, so the Nyquist bin is
-// computed and never used.
+// spark's create_mel_fbank() stops one bin short of the end, so the Nyquist
+// bin is computed and never scanned.
 constexpr int kPowerBins = kMfccFrameSamples / 2 + 1;
 constexpr int kScannedBins = kMfccFrameSamples / 2;
 
-// The 40 triangular filters between 20 Hz and 4000 Hz span 308 FFT bins in
-// total at this sample rate and frame length. mfcc_begin() verifies the figure
-// rather than trusting it.
+// What the 40 filters span at this sample rate and frame length, verified in
+// mfcc_begin().
 constexpr int kFilterBankWeights = 308;
 
-// kiss_fftr_alloc() asks for 6688 bytes for a 640-point real forward FFT.
-// Handing it this buffer keeps the FFT off the heap. 320 factors into 4, 4, 4
-// and 5, so only kissfft's radix-4 and radix-5 butterflies ever run, and
-// neither of those allocates either.
+// What kiss_fftr_alloc() asks for at this frame length, held statically to keep
+// the FFT off the heap.
 constexpr size_t kFftConfigBytes = 6688;
 
 alignas(8) uint8_t g_fft_config_memory[kFftConfigBytes];
@@ -76,8 +72,7 @@ void build_window() {
 /**
  * @brief Fill the DCT matrix used to turn log mel energies into coefficients.
  *
- * The cosine is evaluated in double and stored as float, as spark does, so the
- * coefficients round the same way.
+ * The cosine is evaluated in double and stored as float, as spark does.
  */
 void build_dct_matrix() {
   const float normalizer =
@@ -95,9 +90,8 @@ void build_dct_matrix() {
 /**
  * @brief Build the triangular mel filterbank into one flat weight array.
  *
- * Each filter's weights are non-zero over a contiguous run of FFT bins,
- * because the mel scale rises with frequency, so the weights can be written
- * as they are computed and addressed later by a per-filter offset.
+ * Each filter is non-zero over a contiguous run of FFT bins, so the weights
+ * pack end to end and are addressed by a per-filter offset.
  *
  * @return True when the weights exactly filled the static array.
  */

@@ -239,27 +239,11 @@ BB15Pinout BB15Pinout::niclaSenseMeDefaults() {
   return pinout;
 }
 
-// Derived from the Nicla Voice full pinout and the BB15 v2 castellated edge
-// connector sheet, then matched through the shared Arduino NICLA variant.
+// Derived from the Nicla Voice pinout and the BB15 v2 edge connector sheet.
 //
-// The BB15 v2 sheet puts INT on J1-1, SPI_CS_N on J1-3, SPI_MOSI on J1-4,
-// SPI_MISO on J1-5, SPI_SCK on J1-6 and RESET on J1-8. The Nicla Voice pinout
-// puts, at those same positions, P0.24, P0.29, P0.27, P0.28, P0.11 and P0.02,
-// which the variant's g_APinDescription numbers 5, 6, 8, 7, 9 and 10. TT_MODE_N
-// lands on the J2 low-power line P0.10, which the variant numbers 0.
-//
-// The result is the same as niclaSenseMeDefaults(). That is expected rather
-// than copied: both boards are the Nicla form factor, both use the NICLA
-// variant, and the same header position therefore carries the same signal on
-// each. It is defined separately because the host is always chosen explicitly,
-// and because a future board revision could break the coincidence.
-//
-// Checked against everything the Nicla Voice reserves: the NDP120 takes P0.31,
-// P0.26, P0.14 and P0.18, and none of those is used here. Two of these pins are
-// shared nets rather than private ones, though, and that is a hazard worth
-// knowing about: the pinout shows P0.24 also reaching NDP120 GPIO15 and P0.10
-// also reaching NDP120 GPIO6, both through the header level translators. They
-// are safe only for as long as the NDP120 firmware leaves those GPIOs alone.
+// The interrupt and TT_MODE lines are shared nets, also reaching NDP120 GPIO15
+// and GPIO6 through the header translators, so they are safe only while the
+// NDP120 firmware leaves those GPIOs alone.
 BB15Pinout BB15Pinout::niclaVoiceDefaults() {
   BB15Pinout pinout;
   pinout.host.boardReset = 10u;

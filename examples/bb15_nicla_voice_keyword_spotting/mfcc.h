@@ -13,14 +13,10 @@
  *
  * A copy of that license text is in `LICENSE-APACHE-2.0` at the repository
  * root. This file and `mfcc.cpp` are new code rather than copies, but they
- * reproduce that arithmetic value for value, because the keyword model was
- * trained against exactly these features and a front end that is subtly
- * different fails the model in a way that is hard to diagnose.
+ * reproduce that arithmetic value for value.
  *
- * What differs from spark is storage, not maths. Every buffer here is a
- * fixed-size static sized for this demo's single configuration, because the
- * nRF52832 has 64 KB of RAM and spark's malloc-per-buffer arrangement does not
- * belong on it.
+ * Every buffer here is a fixed-size static sized for this demo's single
+ * configuration.
  */
 
 #ifndef BB15_KWS_MFCC_H_

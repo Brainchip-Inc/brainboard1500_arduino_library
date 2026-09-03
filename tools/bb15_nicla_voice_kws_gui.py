@@ -32,16 +32,15 @@ COMMAND_REQUEST_CONFIG = 3
 MESSAGE_ERROR = 0x83
 MESSAGE_AUDIO_CONFIG = 0x84
 MESSAGE_AUDIO_RESULT = 0x85
-# Status values the device reports in an error packet. Anything else is the
-# Syntiant interface library's own code from a failed chunk read.
+# Anything outside this set is the Syntiant library's own code, reported
+# verbatim by the sketch after a failed chunk read.
 DEVICE_ERRORS = {
     0x81: "the MFCC front end could not start",
     0x82: "the NDP120 microphone did not start, try a power cycle",
     0x83: "BB15 did not come up, check the board is seated",
 }
 
-# From spark's kws_new_tags[], matching the silence and unknown class indices
-# in the model's info.yaml. Neither of those two can trigger a detection.
+# spark's kws_new_tags[], in the order the model's info.yaml gives.
 CLASS_LABELS = (
     "down",
     "go",
@@ -58,10 +57,8 @@ CLASS_LABELS = (
 )
 SILENCE_CLASS = 10
 UNKNOWN_CLASS = 11
-# The device computes and transmits all twelve class scores, and the headless
-# decoder still reads them, which is what makes "unknown dominates" a usable
-# diagnostic. Silence and unknown are hidden here at the display only: neither
-# can ever trigger a detection, so nothing this card reports depends on them.
+# Silence and unknown are hidden at the display only; the device sends all
+# twelve scores.
 DISPLAY_CLASSES = tuple(
     index
     for index in range(len(CLASS_LABELS))
@@ -76,45 +73,35 @@ MAX_WAVEFORM_POINTS = 255
 MAX_MFCC_FRAMES = 255
 
 FULL_SCALE = 32768.0
-# The sketch spends about 10 s loading the NDP120 firmware packages from QSPI
-# flash before it answers anything, and its receive ring buffer is only 256
-# bytes and drops silently once full. Asking slowly keeps the backlog well under
-# that, and re-arming the stream recovers a command dropped anyway.
+# The sketch answers nothing for about 10 s while it loads the NDP120 firmware,
+# and its 256 byte receive buffer drops silently once full.
 CONFIG_REQUEST_INTERVAL_S = 1.5
 CONFIG_TIMEOUT_S = 40.0
 STREAM_ARM_INTERVAL_S = 2.5
-# Blocks arrive every 60 ms, so a gap this long already means the device stopped
-# and the view on screen is stale. Saying so beats leaving it reading as live.
+# Blocks arrive every 60 ms, so a gap this long means the view is stale and
+# should stop reading as live.
 STREAM_STALE_S = 0.6
 STREAM_STALL_TIMEOUT_S = 4.0
 
-# Live view geometry. Each 60 ms block contributes COLUMNS_PER_BLOCK columns, so
-# the window spans WINDOW_COLUMNS / COLUMNS_PER_BLOCK blocks of audio.
+# Each 60 ms block contributes COLUMNS_PER_BLOCK columns to the live view.
 COLUMNS_PER_BLOCK = 8
 WINDOW_COLUMNS = 480
 
-# The waveform scale follows the largest excursion currently on screen, so a
-# burst that has scrolled away stops holding the trace small. Smoothing the
-# change over several blocks keeps it from jolting, and the printed value is
-# rounded to a 1-2-5 step so the caption does not churn every frame.
-# The floor keeps a quiet room looking quiet. Without it the scale relaxes
-# until the microphone's own noise floor, around 600 peak on this board, fills
-# the panel and silence reads as a loud signal.
+# The scale follows what is on screen, smoothed so it does not jolt, and never
+# drops below the floor, so a quiet room still looks quiet.
 SCALE_FLOOR = 4000.0
 SCALE_HEADROOM = 1.15
 SCALE_ATTACK = 0.35
 SCALE_RELEASE = 0.08
-# A single click or the DC blocker settling can be an order of magnitude above
-# speech, so the scale follows a high percentile of the visible columns instead
-# of their maximum. Excursions past it are clamped to the panel edge.
+# A click or the DC blocker settling can sit an order of magnitude above
+# speech, so a percentile rather than the maximum sets the scale.
 SCALE_PERCENTILE = 0.98
 SCALE_CAPTION_DIGITS = 2
 
 METER_FLOOR_DBFS = -60.0
 
-# Every label whose text changes gets a fixed width. A label that resizes when
-# its text changes leaves fragments of the old string behind on macOS Tk, and a
-# stable width also stops the row shuffling as numbers grow and shrink.
+# Every label whose text changes needs a fixed width: one that resizes leaves
+# fragments of the old string behind on macOS Tk.
 WIDTH_RESULT_TITLE = 18
 WIDTH_PREDICTION = 26
 WIDTH_SCORES = 16
@@ -201,9 +188,7 @@ class AudioResult:
     chiming_count: int
     detections: int
     envelope: tuple[int, ...]
-    # Kept because the parser has to walk past these bytes to reach the scores,
-    # and because the headless decoder in the repository's development notes
-    # reads them. The window no longer draws them.
+    # Not drawn, but the parser walks past these bytes to reach the scores.
     features: bytes
     scores: tuple[float, ...]
 
@@ -227,8 +212,7 @@ class PacketReader:
     """Reassemble framed BB15 protocol messages from a byte stream.
 
     Scanning a buffer rather than blocking on the port keeps the window
-    responsive while the device is quiet, and skips the sketch's boot text and
-    the NDP library's own progress output without treating it as an error.
+    responsive, and skips the sketch's boot text without calling it an error.
     """
 
     def __init__(self) -> None:
@@ -266,10 +250,8 @@ class PacketReader:
 def plausible_header(message_type: int, payload_size: int) -> bool:
     """Say whether a header could really start one of the device's messages.
 
-    The four-byte magic occurs by chance inside waveform data, so a scan that
-    starts mid-stream can lock onto a false header. Checking the type against
-    the message set, and the size against what that message must be, keeps the
-    scan hunting instead of consuming the rest of a real packet as a payload.
+    The magic occurs by chance inside waveform data, so checking the type and
+    size keeps a mid-stream scan from consuming a real packet as a payload.
     """
     if message_type == MESSAGE_ERROR:
         return payload_size == ERROR_PAYLOAD_BYTES
@@ -531,10 +513,7 @@ class KeywordSpottingWindow:
             width=WIDTH_SCALE_CAPTION,
         )
         self._scale_label.grid(row=0, column=1, sticky="e")
-        # The speech gate used to be visible as the gap in the feature strip.
-        # With the strip gone this badge is the only thing showing it, so it
-        # sits with the waveform it gates rather than in the result card, where
-        # a detection would hide it.
+        # Sits with the waveform it gates rather than in the result card.
         self._speech_badge = tk.Label(
             card,
             text="IDLE",
