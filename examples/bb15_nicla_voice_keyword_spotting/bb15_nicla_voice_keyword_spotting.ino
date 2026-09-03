@@ -2,6 +2,8 @@
 
 #include <NDP.h>
 
+#include "mfcc.h"
+
 // nicla_voice and nicla_sense share the Arduino NICLA variant, so this guard
 // can only reject other families. Building this for Nicla Sense ME compiles but
 // fails at NDP.begin(), because that board has no NDP120.
@@ -48,7 +50,9 @@ constexpr uint8_t kChunkFailureLimit = 25u;
 // spark/source/Kconfig (SAMPLING_RATE, MFCC_SAMPLE_COUNT, AUDIO_BLOCK_MS); the
 // gating and decision values come from spark/source/core/common/kws_config.c.
 constexpr uint32_t kSampleRateHz = 16000u;
+constexpr uint16_t kMfccHopSamples = 320u;
 constexpr uint16_t kBlockSamples = 960u;
+constexpr uint8_t kMfccFramesPerBlock = kBlockSamples / kMfccHopSamples;
 constexpr uint16_t kSpectrogramFrames = 49u;
 constexpr uint8_t kSpectrogramCoefficients = 10u;
 constexpr uint16_t kRmsThreshold = 550u;
@@ -57,6 +61,19 @@ constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
 constexpr uint16_t kScoreThresholdQ15 = 16384u;
 constexpr uint16_t kDebounceMs = 300u;
 constexpr uint8_t kChimingThreshold = 3u;
+
+// Quantization of an MFCC coefficient to the model's uint8 input, from
+// do_inference() in spark/source/apps/demo_apps/main.cpp: clamp to 0..255 then
+// truncate. The full-scale divisor is the model's own, from
+// spark/source/external/model_files/kws/kws/info.yaml, and is not a tuning
+// knob. It matches this front end: a silent frame gives coefficient 0 of
+// -123.569649, so silence lands one step below zero on the model's scale.
+constexpr float kMfccFullScale = 123.56967163085938f;
+
+// spark clears its spectrogram to float zero, which quantizes to 128 rather
+// than to 0, so a cleared ring here has to hold 128 to feed the model the same
+// bytes spark would.
+constexpr uint8_t kClearedFeature = 128u;
 
 // spark's DC blocking high-pass, from dc_block_process() in
 // spark/source/core/interface/audio/pdm_mic.c. Its output is what spark takes
@@ -93,11 +110,15 @@ constexpr size_t kAudioResultMetadataBytes = 28u;
 // packet so the layout is final, and carry these placeholders until they do.
 constexpr uint8_t kNoPrediction = 0xFFu;
 constexpr uint8_t kNoScores = 0u;
-constexpr uint8_t kNoMfccFrames = 0u;
-constexpr uint8_t kSpeechGatingInactive = 0u;
 constexpr uint8_t kNoChiming = 0u;
 constexpr uint16_t kNoTimingMs = 0u;
 constexpr uint8_t kStatusOk = 0u;
+
+// Status values for the error packet. A chunk-capture failure reports the
+// Syntiant interface library's own code, which is a small positive, so setup
+// failures take a range of their own.
+constexpr uint8_t kStatusMfccInitFailed = 0x81u;
+constexpr uint8_t kStatusMicrophoneFailed = 0x82u;
 constexpr uint8_t kReservedByte = 0u;
 
 constexpr const char* kSketchName = "bb15_nicla_voice_keyword_spotting";
@@ -110,6 +131,14 @@ struct AudioBlock {
   uint16_t rms = 0u;
   uint16_t peak = 0u;
   uint16_t captureMs = 0u;
+  uint16_t featureMs = 0u;
+  bool speechActive = false;
+};
+
+/** @brief spark's voice activity state, its SPEECH_IDLE and SPEECH_ACTIVE. */
+enum class SpeechState : uint8_t {
+  Idle,
+  Active,
 };
 
 /**
@@ -131,8 +160,21 @@ struct DcBlockState {
 };
 
 alignas(4) uint8_t g_chunk[kChunkBufferBytes];
-int16_t g_block[kBlockSamples];
+// spark's mfcc_process_input() layout: [0, hop) keeps the last hop of the
+// previous block and [hop, hop + block) holds this one. Each MFCC window is two
+// hops wide and steps by one hop, so a 60 ms block yields exactly three frames
+// and the final window ends at the buffer end.
+int16_t g_mfcc_input[kMfccHopSamples + kBlockSamples];
 int16_t g_waveform[2u * kWaveformPoints];
+// The model's input, held quantized because that is the only form it is used
+// in. g_spectrogram_index is the write position, which is also the oldest
+// frame, so the model input unrolls from it.
+uint8_t g_spectrogram[kSpectrogramFrames * kSpectrogramCoefficients];
+uint16_t g_spectrogram_index = 0u;
+uint8_t g_new_features[kMfccFramesPerBlock * kSpectrogramCoefficients];
+uint8_t g_new_frame_count = 0u;
+SpeechState g_speech_state = SpeechState::Idle;
+uint32_t g_speech_started_ms = 0u;
 DcBlockState g_dc_block;
 size_t g_block_fill = 0u;
 int64_t g_block_energy = 0;
@@ -145,6 +187,10 @@ uint32_t g_next_chunk_poll_ms = 0u;
 uint16_t g_dropped_chunks = 0u;
 uint32_t g_sequence = 0u;
 bool g_streaming = false;
+// Set when setup could not finish. The board then answers host commands with
+// the reason instead of going quiet, because a setup message printed once at
+// boot is gone by the time a desktop tool opens the port.
+uint8_t g_setup_failure = kStatusOk;
 
 /**
  * @brief Clamp a millisecond duration into the packet's 16-bit field.
@@ -164,20 +210,16 @@ uint16_t clamp_u16(uint32_t value) {
 void set_led(RGBColors color) { nicla::leds.setColor(color); }
 
 /**
- * @brief Report a fatal setup failure and blink the LED forever.
+ * @brief Record a setup failure and report it on the serial port.
  *
- * @param stage  Name of the setup step that failed.
+ * @param stage   Name of the setup step that failed.
+ * @param status  Status the error packet should carry.
  */
-void halt_forever(const char* stage) {
+void fail_setup(const char* stage, uint8_t status) {
+  g_setup_failure = status;
   Serial.print(kLogPrefix);
   Serial.print(" result=FAIL stage=");
   Serial.println(stage);
-  for (;;) {
-    set_led(red);
-    delay(50);
-    set_led(off);
-    delay(950);
-  }
 }
 
 /**
@@ -262,28 +304,33 @@ void send_error_packet(uint8_t status) {
 void send_audio_result_packet(const AudioBlock& block) {
   const uint32_t waveform_bytes =
       static_cast<uint32_t>(sizeof(int16_t)) * 2u * kWaveformPoints;
+  const uint32_t feature_bytes =
+      static_cast<uint32_t>(g_new_frame_count) * kSpectrogramCoefficients;
   write_packet_header(PacketType::AudioResult,
                       static_cast<uint32_t>(kAudioResultMetadataBytes) +
-                          waveform_bytes);
+                          waveform_bytes + feature_bytes);
   write_u32(block.sequence);
   write_u32(block.deviceMs);
   write_u16(block.rms);
   write_u16(block.peak);
   write_u16(g_dropped_chunks);
   write_u16(block.captureMs);
+  write_u16(block.featureMs);
   write_u16(kNoTimingMs);
-  write_u16(kNoTimingMs);
-  Serial.write(kSpeechGatingInactive);
+  Serial.write(static_cast<uint8_t>(block.speechActive ? 1u : 0u));
   Serial.write(kStatusOk);
   Serial.write(kNoPrediction);
   Serial.write(kNoScores);
   Serial.write(static_cast<uint8_t>(kWaveformPoints));
-  Serial.write(kNoMfccFrames);
+  Serial.write(g_new_frame_count);
   Serial.write(kNoChiming);
   Serial.write(kReservedByte);
   for (uint16_t point = 0u; point < 2u * kWaveformPoints; ++point) {
     write_i16(g_waveform[point]);
   }
+  Serial.write(g_new_features,
+               static_cast<size_t>(g_new_frame_count) *
+                   kSpectrogramCoefficients);
   Serial.flush();
 }
 
@@ -362,8 +409,9 @@ void remove_dc_offset(int16_t* samples, size_t count) {
  * @brief Reduce the completed block to a min/max envelope for the live view.
  */
 void compute_waveform_envelope() {
+  const int16_t* block = &g_mfcc_input[kMfccHopSamples];
   for (uint16_t point = 0u; point < kWaveformPoints; ++point) {
-    const int16_t* window = &g_block[point * kWaveformWindowSamples];
+    const int16_t* window = &block[point * kWaveformWindowSamples];
     int16_t lowest = INT16_MAX;
     int16_t highest = INT16_MIN;
     for (uint16_t index = 0u; index < kWaveformWindowSamples; ++index) {
@@ -380,6 +428,89 @@ void compute_waveform_envelope() {
 }
 
 /**
+ * @brief Quantize one MFCC coefficient to the model's uint8 input scale.
+ *
+ * @param coefficient  MFCC coefficient as the front end produced it.
+ * @return The byte the model expects.
+ */
+uint8_t quantize_feature(float coefficient) {
+  float scaled = ((coefficient / kMfccFullScale) + 1.0f) * 128.0f;
+  if (scaled < 0.0f) {
+    scaled = 0.0f;
+  } else if (scaled > 255.0f) {
+    scaled = 255.0f;
+  }
+  return static_cast<uint8_t>(scaled);
+}
+
+/**
+ * @brief Throw away the part-built model input, as spark does when it gives up
+ *        on an utterance.
+ */
+void clear_spectrogram() {
+  memset(g_spectrogram, kClearedFeature, sizeof(g_spectrogram));
+  g_spectrogram_index = 0u;
+}
+
+/**
+ * @brief Turn the filled block into MFCC frames and push them to the model
+ *        input.
+ *
+ * @return Milliseconds spent on the feature computation.
+ */
+uint16_t extract_features() {
+  const uint32_t started_ms = millis();
+  float coefficients[kMfccFeatures];
+
+  for (uint8_t frame = 0u; frame < kMfccFramesPerBlock; ++frame) {
+    mfcc_compute(&g_mfcc_input[frame * kMfccHopSamples], coefficients);
+    uint8_t* pushed = &g_spectrogram[g_spectrogram_index *
+                                     kSpectrogramCoefficients];
+    for (uint8_t index = 0u; index < kSpectrogramCoefficients; ++index) {
+      const uint8_t feature = quantize_feature(coefficients[index]);
+      pushed[index] = feature;
+      g_new_features[g_new_frame_count * kSpectrogramCoefficients + index] =
+          feature;
+    }
+    ++g_new_frame_count;
+    if (++g_spectrogram_index >= kSpectrogramFrames) {
+      g_spectrogram_index = 0u;
+    }
+  }
+  return clamp_u16(millis() - started_ms);
+}
+
+/**
+ * @brief Decide whether this block's audio should reach the MFCC front end.
+ *
+ * spark's rule, from audio_process_thread() in
+ * spark/source/core/common/audio/audio_processor.c. A block at or above the RMS
+ * threshold is speech and restarts the timer. A quieter block is still
+ * processed while the utterance is within kSpeechActiveTimeMs of its last loud
+ * block, which is what captures the tail of a word; the first quiet block past
+ * that returns to idle and throws the part-built model input away.
+ *
+ * @param rms  This block's RMS, taken after the DC blocker as spark does.
+ * @return True when the block should be turned into features.
+ */
+bool gate_block(uint16_t rms) {
+  if (rms >= kRmsThreshold) {
+    g_speech_state = SpeechState::Active;
+    g_speech_started_ms = millis();
+    return true;
+  }
+  if (g_speech_state == SpeechState::Idle) {
+    return false;
+  }
+  if (millis() - g_speech_started_ms > kSpeechActiveTimeMs) {
+    g_speech_state = SpeechState::Idle;
+    clear_spectrogram();
+    return false;
+  }
+  return true;
+}
+
+/**
  * @brief Stream the filled block and start collecting the next one.
  */
 void publish_filled_block() {
@@ -390,6 +521,16 @@ void publish_filled_block() {
       sqrtf(static_cast<float>(g_block_energy) / kBlockSamples));
   block.peak = g_block_peak;
   block.captureMs = clamp_u16(g_block_capture_ms);
+
+  g_new_frame_count = 0u;
+  if (gate_block(block.rms)) {
+    block.featureMs = extract_features();
+  }
+  block.speechActive = g_speech_state == SpeechState::Active;
+  // The overlap advances whether or not the block became features, or the next
+  // window would splice this block onto one that is already 60 ms stale.
+  memcpy(&g_mfcc_input[0], &g_mfcc_input[kBlockSamples],
+         kMfccHopSamples * sizeof(int16_t));
 
   compute_waveform_envelope();
   send_audio_result_packet(block);
@@ -413,7 +554,7 @@ void accumulate_samples(const int16_t* samples, size_t count) {
     const size_t taking = (count - consumed) < room ? (count - consumed) : room;
     for (size_t index = 0u; index < taking; ++index) {
       const int16_t sample = samples[consumed + index];
-      g_block[g_block_fill + index] = sample;
+      g_mfcc_input[kMfccHopSamples + g_block_fill + index] = sample;
       g_block_energy += static_cast<int32_t>(sample) * sample;
       const uint16_t magnitude = static_cast<uint16_t>(sample < 0 ? -sample : sample);
       if (magnitude > g_block_peak) {
@@ -490,6 +631,10 @@ bool capture_fresh_chunk() {
  */
 void reset_capture_state() {
   g_dc_block = DcBlockState();
+  g_speech_state = SpeechState::Idle;
+  g_speech_started_ms = 0u;
+  g_new_frame_count = 0u;
+  clear_spectrogram();
   g_block_fill = 0u;
   g_block_energy = 0u;
   g_block_peak = 0u;
@@ -543,8 +688,14 @@ void setup() {
   Serial.print(kBlockSamples);
   Serial.println(" samples");
 
+  if (!mfcc_begin()) {
+    fail_setup("mfcc", kStatusMfccInitFailed);
+    return;
+  }
+  clear_spectrogram();
   if (!prepare_microphone()) {
-    halt_forever("microphone");
+    fail_setup("microphone", kStatusMicrophoneFailed);
+    return;
   }
 
   set_led(off);
@@ -557,6 +708,18 @@ void setup() {
 
 void loop() {
   const PacketType command = poll_host_command();
+  if (g_setup_failure != kStatusOk) {
+    // Keep answering, so a tool that connects long after boot is told why the
+    // board has nothing to stream rather than being left to guess.
+    if (command != static_cast<PacketType>(0u)) {
+      send_error_packet(g_setup_failure);
+    }
+    set_led(red);
+    delay(50);
+    set_led(off);
+    delay(450);
+    return;
+  }
   if (command == PacketType::StartStream) {
     reset_capture_state();
     g_streaming = true;

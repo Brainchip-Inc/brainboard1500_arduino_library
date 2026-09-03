@@ -35,8 +35,15 @@ COMMAND_REQUEST_CONFIG = 3
 MESSAGE_ERROR = 0x83
 MESSAGE_AUDIO_CONFIG = 0x84
 MESSAGE_AUDIO_RESULT = 0x85
+# Status values the device reports in an error packet. Anything else is the
+# Syntiant interface library's own code from a failed chunk read.
+DEVICE_ERRORS = {
+    0x81: "the MFCC front end could not start",
+    0x82: "the NDP120 microphone did not start, try a power cycle",
+}
 ERROR_PAYLOAD_BYTES = 1
 MAX_WAVEFORM_POINTS = 255
+MAX_MFCC_FRAMES = 255
 
 FULL_SCALE = 32768.0
 # The sketch spends about 10 s loading the NDP120 firmware packages from QSPI
@@ -55,6 +62,15 @@ STREAM_STALL_TIMEOUT_S = 4.0
 # the window spans WINDOW_COLUMNS / COLUMNS_PER_BLOCK blocks of audio.
 COLUMNS_PER_BLOCK = 8
 WINDOW_COLUMNS = 480
+
+# The spectrogram strip spans the same stretch of audio as the waveform above
+# it, one column per MFCC frame. Blocks the speech gate suppressed produce no
+# frames, so their columns are drawn as an idle gap and the time axes stay
+# aligned.
+SPECTROGRAM_FRAMES_PER_BLOCK = 3
+SPECTROGRAM_COLUMNS = WINDOW_COLUMNS // COLUMNS_PER_BLOCK * SPECTROGRAM_FRAMES_PER_BLOCK
+SPECTROGRAM_ZOOM_X = 5
+SPECTROGRAM_ZOOM_Y = 11
 
 # The waveform scale follows the largest excursion currently on screen, so a
 # burst that has scrolled away stops holding the trace small. Smoothing the
@@ -84,7 +100,8 @@ WIDTH_SCORES = 22
 WIDTH_VIEW_CAPTION = 52
 WIDTH_SCALE_CAPTION = 20
 WIDTH_LEVEL = 26
-WIDTH_STATUS = 86
+WIDTH_BADGE = 8
+WIDTH_STATUS = 104
 WIDTH_CONNECTION = 14
 
 COLOR_PAGE = "#e9edf0"
@@ -106,6 +123,29 @@ COLOR_METER_TRACK = "#1b262b"
 COLOR_METER_QUIET = "#3d7c88"
 COLOR_METER_LOUD = "#35a37f"
 COLOR_METER_TICK = "#c9d6db"
+COLOR_SPECTROGRAM_IDLE = "#1b262b"
+COLOR_BADGE_IDLE_BG = "#1e2c33"
+COLOR_BADGE_IDLE_FG = "#7f97a3"
+COLOR_BADGE_SPEECH_BG = "#1d7a5f"
+COLOR_BADGE_SPEECH_FG = "#eafaf4"
+# Real feature bytes occupy a narrow slice of the model's 0 to 255 input scale,
+# and coefficient 0 carries the frame energy so its slice is far wider than the
+# rest: measured over speech it spans about 76 of the 256 steps while the other
+# nine span 5 to 19. One shading window cannot show both, so the energy row gets
+# its own. Both windows are fixed and stated on screen, not auto-ranged, so
+# nothing shifts under the eye.
+SPECTROGRAM_ENERGY_SHADE = (64, 192)
+SPECTROGRAM_SHAPE_SHADE = (112, 144)
+
+# Feature colour ramp, from the panel background through the waveform teal to
+# near white.
+SPECTROGRAM_RAMP = (
+    (0, (0x0B, 0x14, 0x18)),
+    (64, (0x1D, 0x4F, 0x5A)),
+    (128, (0x2F, 0x7D, 0x8A)),
+    (192, (0x6F, 0xD3, 0xDE)),
+    (255, (0xEA, 0xF7, 0xF9)),
+)
 COLOR_OK = "#287c68"
 COLOR_WARN = "#a16a1c"
 COLOR_ERROR = "#a84038"
@@ -154,6 +194,7 @@ class AudioResult:
     mfcc_frames: int
     chiming_count: int
     envelope: Tuple[int, ...]
+    features: bytes
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,12 +262,17 @@ def plausible_header(message_type: int, payload_size: int) -> bool:
     if message_type == MESSAGE_AUDIO_CONFIG:
         return payload_size == AUDIO_CONFIG.size
     if message_type == MESSAGE_AUDIO_RESULT:
-        envelope_bytes = payload_size - AUDIO_RESULT.size
-        return (
-            0 < envelope_bytes <= 4 * MAX_WAVEFORM_POINTS
-            and envelope_bytes % 4 == 0
-        )
+        trailer = payload_size - AUDIO_RESULT.size
+        return 0 < trailer <= 4 * MAX_WAVEFORM_POINTS + 10 * MAX_MFCC_FRAMES
     return False
+
+
+def describe_error(payload: bytes) -> str:
+    """Turn an error payload into something worth putting on screen."""
+    if len(payload) != ERROR_PAYLOAD_BYTES:
+        return f"malformed error payload {payload.hex()}"
+    status = payload[0]
+    return DEVICE_ERRORS.get(status, f"device status {status}")
 
 
 def write_command(port: serial.Serial, command: int) -> None:
@@ -256,15 +302,51 @@ def parse_audio_result(payload: bytes) -> AudioResult:
     if len(payload) < AUDIO_RESULT.size:
         raise ValueError("truncated audio-result payload")
     metadata = AUDIO_RESULT.unpack(payload[: AUDIO_RESULT.size])
-    envelope_bytes = payload[AUDIO_RESULT.size :]
-    waveform_points = metadata[12]
-    expected = 4 * waveform_points
-    if len(envelope_bytes) != expected:
+    trailer = payload[AUDIO_RESULT.size :]
+    waveform_points, mfcc_frames = metadata[12], metadata[13]
+    envelope_bytes = 4 * waveform_points
+    expected = envelope_bytes + 10 * mfcc_frames
+    if len(trailer) != expected:
         raise ValueError(
-            f"invalid envelope: {len(envelope_bytes)} bytes for {waveform_points} points"
+            f"invalid result trailer: {len(trailer)} bytes, expected {expected}"
         )
-    envelope = struct.unpack(f"<{2 * waveform_points}h", envelope_bytes)
-    return AudioResult(*metadata[:15], envelope=envelope)
+    envelope = struct.unpack(f"<{2 * waveform_points}h", trailer[:envelope_bytes])
+    return AudioResult(
+        *metadata[:15], envelope=envelope, features=trailer[envelope_bytes:]
+    )
+
+
+def build_feature_palette(shade_window: Tuple[int, int]) -> bytes:
+    """Map every model input byte to an RGB triple, ready to index by value.
+
+    Folds the shading window into the table, so rendering a frame stays a
+    lookup per coefficient.
+
+    Args:
+        shade_window: Byte values that map to the ends of the colour ramp.
+    """
+    low, high = shade_window
+    palette = bytearray()
+    for value in range(256):
+        shade = (value - low) * 255.0 / (high - low)
+        shade = max(0.0, min(255.0, shade))
+        lower, upper = SPECTROGRAM_RAMP[0], SPECTROGRAM_RAMP[-1]
+        for index in range(len(SPECTROGRAM_RAMP) - 1):
+            if SPECTROGRAM_RAMP[index][0] <= shade <= SPECTROGRAM_RAMP[index + 1][0]:
+                lower, upper = SPECTROGRAM_RAMP[index], SPECTROGRAM_RAMP[index + 1]
+                break
+        span = upper[0] - lower[0]
+        weight = 0.0 if span == 0 else (shade - lower[0]) / span
+        palette.extend(
+            round(lower[1][channel] + weight * (upper[1][channel] - lower[1][channel]))
+            for channel in range(3)
+        )
+    return bytes(palette)
+
+
+ENERGY_PALETTE = build_feature_palette(SPECTROGRAM_ENERGY_SHADE)
+SHAPE_PALETTE = build_feature_palette(SPECTROGRAM_SHAPE_SHADE)
+IDLE_PIXEL = bytes(int(COLOR_SPECTROGRAM_IDLE[i : i + 2], 16) for i in (1, 3, 5))
 
 
 def dbfs(amplitude: float) -> float:
@@ -311,6 +393,10 @@ class KeywordSpottingWindow:
         self._columns: Deque[Tuple[int, int]] = deque(
             [(0, 0)] * WINDOW_COLUMNS, maxlen=WINDOW_COLUMNS
         )
+        self._features: Deque[Optional[bytes]] = deque(
+            [None] * SPECTROGRAM_COLUMNS, maxlen=SPECTROGRAM_COLUMNS
+        )
+        self._spectrogram_image: Optional[tk.PhotoImage] = None
         self._scale = SCALE_FLOOR
         self._level_dbfs = METER_FLOOR_DBFS
         self._live = True
@@ -430,9 +516,9 @@ class KeywordSpottingWindow:
             bg=COLOR_LIVE,
             highlightthickness=0,
             bd=0,
-            height=280,
+            height=180,
         )
-        self._canvas.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(8, 10))
+        self._canvas.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(8, 12))
         self._canvas.bind("<Configure>", self._on_canvas_resize)
         self._grid_lines = [
             self._canvas.create_line(0, 0, 0, 0, fill=COLOR_GRID) for _ in range(2)
@@ -442,8 +528,38 @@ class KeywordSpottingWindow:
             0, 0, 0, 0, 0, 0, fill=COLOR_WAVE_FILL, outline=COLOR_WAVE_EDGE, width=1
         )
 
+        tk.Label(
+            card,
+            text=(
+                "MFCC FEATURES   shading  energy "
+                f"{SPECTROGRAM_ENERGY_SHADE[0]} to {SPECTROGRAM_ENERGY_SHADE[1]}"
+                f"   others {SPECTROGRAM_SHAPE_SHADE[0]} to "
+                f"{SPECTROGRAM_SHAPE_SHADE[1]}"
+            ),
+            bg=COLOR_LIVE,
+            fg=COLOR_LIVE_CAPTION,
+            font=("TkDefaultFont", 9, "bold"),
+            anchor="w",
+        ).grid(row=2, column=0, sticky="w")
+        self._speech_badge = tk.Label(
+            card,
+            text="IDLE",
+            bg=COLOR_BADGE_IDLE_BG,
+            fg=COLOR_BADGE_IDLE_FG,
+            font=("TkDefaultFont", 9, "bold"),
+            width=WIDTH_BADGE,
+            padx=6,
+            pady=2,
+        )
+        self._speech_badge.grid(row=2, column=1, sticky="e")
+
+        self._spectrogram = tk.Label(card, bg=COLOR_LIVE, bd=0)
+        self._spectrogram.grid(
+            row=3, column=0, columnspan=2, sticky="nsew", pady=(6, 12)
+        )
+
         meter_row = tk.Frame(card, bg=COLOR_LIVE)
-        meter_row.grid(row=2, column=0, columnspan=2, sticky="ew")
+        meter_row.grid(row=4, column=0, columnspan=2, sticky="ew")
         meter_row.columnconfigure(0, weight=1)
         self._meter = tk.Canvas(
             meter_row, bg=COLOR_LIVE, highlightthickness=0, bd=0, height=18
@@ -520,12 +636,17 @@ class KeywordSpottingWindow:
         )
 
     def _clear_live_view(self) -> None:
-        """Blank the waveform and meter so a dead link cannot look live."""
+        """Blank the waveform, features and meter so a dead link cannot look live."""
         self._mark_stale()
         self._columns = deque([(0, 0)] * WINDOW_COLUMNS, maxlen=WINDOW_COLUMNS)
+        self._features = deque(
+            [None] * SPECTROGRAM_COLUMNS, maxlen=SPECTROGRAM_COLUMNS
+        )
         self._scale = SCALE_FLOOR
         self._level_dbfs = METER_FLOOR_DBFS
+        self._set_speech_badge(False)
         self._redraw_waveform()
+        self._redraw_spectrogram()
         self._redraw_meter()
         set_text(self._scale_label, self._scale_caption())
         set_text(self._level_label, "rms    --       -- dBFS")
@@ -587,6 +708,16 @@ class KeywordSpottingWindow:
             self._score_label.configure(text="12 classes pending")
         self._redraw_meter()
 
+    def _append_features(self, result: AudioResult) -> None:
+        """Add this block's feature frames, or an idle gap when it produced none."""
+        coefficients = self._config.mfcc_coefficients if self._config else 10
+        if result.mfcc_frames == 0:
+            self._features.extend([None] * SPECTROGRAM_FRAMES_PER_BLOCK)
+            return
+        for frame in range(result.mfcc_frames):
+            start = frame * coefficients
+            self._features.append(result.features[start : start + coefficients])
+
     def _window_seconds(self) -> float:
         """Length of audio the live view holds, in seconds."""
         assert self._config is not None
@@ -635,6 +766,41 @@ class KeywordSpottingWindow:
         ]
         self._canvas.coords(self._wave, *coordinates)
 
+    def _redraw_spectrogram(self) -> None:
+        """Repaint the feature strip from the column history.
+
+        Built as a small PPM, one pixel per coefficient, and magnified by Tk
+        rather than assembled at display size, which keeps the per-block cost
+        to a few thousand bytes of Python work.
+        """
+        rows = self._config.mfcc_coefficients if self._config else 10
+        raster = bytearray()
+        for row in range(rows):
+            palette = ENERGY_PALETTE if row == 0 else SHAPE_PALETTE
+            for column in self._features:
+                if column is None:
+                    raster.extend(IDLE_PIXEL)
+                else:
+                    value = column[row]
+                    raster.extend(palette[3 * value : 3 * value + 3])
+        header = f"P6\n{SPECTROGRAM_COLUMNS} {rows}\n255\n".encode("ascii")
+        image = tk.PhotoImage(data=bytes(header) + bytes(raster), format="PPM")
+        image = image.zoom(SPECTROGRAM_ZOOM_X, SPECTROGRAM_ZOOM_Y)
+        self._spectrogram.configure(image=image)
+        # Tk does not own the image, so the reference has to be kept here.
+        self._spectrogram_image = image
+
+    def _set_speech_badge(self, active: bool) -> None:
+        """Show whether spark's speech gate is passing audio to the front end."""
+        wanted = "SPEECH" if active else "IDLE"
+        if self._speech_badge.cget("text") == wanted:
+            return
+        self._speech_badge.configure(
+            text=wanted,
+            bg=COLOR_BADGE_SPEECH_BG if active else COLOR_BADGE_IDLE_BG,
+            fg=COLOR_BADGE_SPEECH_FG if active else COLOR_BADGE_IDLE_FG,
+        )
+
     def _redraw_meter(self) -> None:
         """Repaint the level meter bar and its threshold tick."""
         width = max(self._meter.winfo_width(), 1)
@@ -661,9 +827,12 @@ class KeywordSpottingWindow:
         assert self._config is not None
         self._mark_live()
         self._columns.extend(aggregate_columns(result.envelope, COLUMNS_PER_BLOCK))
+        self._append_features(result)
         self._update_scale()
         self._level_dbfs = dbfs(result.rms)
+        self._set_speech_badge(bool(result.speech_active))
         self._redraw_waveform()
+        self._redraw_spectrogram()
         self._redraw_meter()
 
         set_text(self._scale_label, self._scale_caption())
@@ -673,7 +842,7 @@ class KeywordSpottingWindow:
         status = (
             f"block {result.sequence:<8d}peak {result.peak:5d}   "
             f"dropped {result.dropped_chunks:<5d}capture {result.capture_ms:3d} ms   "
-            f"{block_rate:4.1f} blk/s"
+            f"features {result.feature_ms:3d} ms   {block_rate:4.1f} blk/s"
         )
         if result.status != 0:
             status += f"   BB15 status={result.status}"
@@ -778,7 +947,7 @@ def main() -> int:
 
                 message_type, payload = packet
                 if message_type == MESSAGE_ERROR:
-                    raise RuntimeError(f"device runtime error: status={payload.hex()}")
+                    raise RuntimeError(f"device reports {describe_error(payload)}")
                 if message_type != MESSAGE_AUDIO_RESULT:
                     continue
                 result = parse_audio_result(payload)
