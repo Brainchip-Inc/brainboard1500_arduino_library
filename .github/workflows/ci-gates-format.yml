@@ -9,6 +9,8 @@
 # actions/checkout is GitHub's own first-party action, not a third-party one.
 # It checks out the BASE branch, so the validator that runs is always the copy
 # on the protected branch and never a version edited inside the pull request.
+# The one exception is a base branch that carries no validator at all, which is
+# how these gates get installed in the first place. See "Select the validator".
 
 name: ci-gates
 
@@ -30,10 +32,40 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
+      - name: Check out the pull request, as a fallback validator only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pull-request
+
+      - name: Select the validator
+        run: |
+          set -euo pipefail
+
+          # Preferring the base branch is what stops a pull request from
+          # relaxing its own gate. The pull request's copy is used only when the
+          # base branch carries no validator at all, which is the pull request
+          # that installs these gates in the first place. That fallback cannot
+          # weaken an installed gate, because a pull request cannot remove the
+          # validator from the branch it is targeting.
+          validator=$PWD/.github/ci-gates/check-subject.sh
+          if [ ! -f "$validator" ]; then
+            validator=$PWD/pull-request/.github/ci-gates/check-subject.sh
+            echo "::notice::the base branch carries no validator yet, so this pull request's own copy is used"
+          fi
+
+          if [ ! -f "$validator" ]; then
+            echo "::error::no validator found on either the base branch or this pull request"
+            exit 1
+          fi
+
+          echo "VALIDATOR=$validator" >> "$GITHUB_ENV"
+          echo "validator: $validator"
+
       - name: Check the pull request title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: .github/ci-gates/check-subject.sh "$PR_TITLE"
+        run: bash "$VALIDATOR" "$PR_TITLE"
 
       - name: Check every commit subject
         if: github.event.pull_request.base.ref == github.event.repository.default_branch
@@ -58,7 +90,7 @@ jobs:
 
           failed=0
           for subject in "${subjects[@]}"; do
-            .github/ci-gates/check-subject.sh "$subject" || failed=1
+            bash "$VALIDATOR" "$subject" || failed=1
           done
 
           if [ "$failed" -ne 0 ]; then
