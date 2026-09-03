@@ -51,6 +51,7 @@ struct BB15Pinout {
 
   static BB15Pinout niclaVisionDefaults();
   static BB15Pinout niclaSenseMeDefaults();
+  static BB15Pinout niclaVoiceDefaults();
 };
 
 struct BB15Config {
