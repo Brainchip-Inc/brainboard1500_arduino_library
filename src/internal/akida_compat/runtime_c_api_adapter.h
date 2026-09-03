@@ -35,8 +35,7 @@ class RuntimeCAPIAdapter {
   int predict(uint8_t* input, const uint32_t* input_dims, float* output,
               int output_size_bytes);
   void fit(uint8_t* input, const uint32_t* input_dims, int32_t* input_label);
-  int enqueue(uint8_t* input, const uint32_t* input_dims,
-              int32_t* input_label);
+  int enqueue(uint8_t* input, const uint32_t* input_dims, int32_t* input_label);
   int fetch(uint8_t* output, int output_size, bool dequantize);
   int save_learn_weights(uint32_t* weights_ptr, uint32_t size);
   uint32_t learn_mem_size() const;
