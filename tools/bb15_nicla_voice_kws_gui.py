@@ -86,15 +86,6 @@ STREAM_STALL_TIMEOUT_S = 4.0
 COLUMNS_PER_BLOCK = 8
 WINDOW_COLUMNS = 480
 
-# The spectrogram strip spans the same stretch of audio as the waveform above
-# it, one column per MFCC frame. Blocks the speech gate suppressed produce no
-# frames, so their columns are drawn as an idle gap and the time axes stay
-# aligned.
-SPECTROGRAM_FRAMES_PER_BLOCK = 3
-SPECTROGRAM_COLUMNS = WINDOW_COLUMNS // COLUMNS_PER_BLOCK * SPECTROGRAM_FRAMES_PER_BLOCK
-SPECTROGRAM_ZOOM_X = 5
-SPECTROGRAM_ZOOM_Y = 11
-
 # The waveform scale follows the largest excursion currently on screen, so a
 # burst that has scrolled away stops holding the trace small. Smoothing the
 # change over several blocks keeps it from jolting, and the printed value is
@@ -146,7 +137,6 @@ COLOR_METER_TRACK = "#1b262b"
 COLOR_METER_QUIET = "#3d7c88"
 COLOR_METER_LOUD = "#35a37f"
 COLOR_METER_TICK = "#c9d6db"
-COLOR_SPECTROGRAM_IDLE = "#1b262b"
 COLOR_BADGE_IDLE_BG = "#1e2c33"
 COLOR_BADGE_IDLE_FG = "#7f97a3"
 COLOR_BADGE_SPEECH_BG = "#1d7a5f"
@@ -155,24 +145,48 @@ COLOR_SCORE_BAR_KEYWORD = "#2f7d8a"
 COLOR_SCORE_BAR_TRIGGERED = "#1d8568"
 COLOR_SCORE_TRACK = "#e3e9ec"
 COLOR_SCORE_THRESHOLD = "#93a6af"
-# Real feature bytes occupy a narrow slice of the model's 0 to 255 input scale,
-# and coefficient 0 carries the frame energy so its slice is far wider than the
-# rest: measured over speech it spans about 76 of the 256 steps while the other
-# nine span 5 to 19. One shading window cannot show both, so the energy row gets
-# its own. Both windows are fixed and stated on screen, not auto-ranged, so
-# nothing shifts under the eye.
-SPECTROGRAM_ENERGY_SHADE = (64, 192)
-SPECTROGRAM_SHAPE_SHADE = (112, 144)
+METER_FLOOR_DBFS = -60.0
 
-# Feature colour ramp, from the panel background through the waveform teal to
-# near white.
-SPECTROGRAM_RAMP = (
-    (0, (0x0B, 0x14, 0x18)),
-    (64, (0x1D, 0x4F, 0x5A)),
-    (128, (0x2F, 0x7D, 0x8A)),
-    (192, (0x6F, 0xD3, 0xDE)),
-    (255, (0xEA, 0xF7, 0xF9)),
-)
+# Every label whose text changes gets a fixed width. A label that resizes when
+# its text changes leaves fragments of the old string behind on macOS Tk, and a
+# stable width also stops the row shuffling as numbers grow and shrink.
+WIDTH_RESULT_TITLE = 18
+WIDTH_PREDICTION = 26
+WIDTH_SCORES = 16
+WIDTH_VIEW_CAPTION = 52
+WIDTH_SCALE_CAPTION = 20
+WIDTH_LEVEL = 26
+WIDTH_BADGE = 8
+WIDTH_STATUS = 124
+WIDTH_CONNECTION = 14
+
+COLOR_PAGE = "#e9edf0"
+COLOR_HEADER = "#15232d"
+COLOR_HEADER_ACCENT = "#94c9cf"
+COLOR_HEADER_TITLE = "#f7fbfc"
+COLOR_CARD = "#ffffff"
+COLOR_TEXT = "#1f2d35"
+COLOR_MUTED = "#62727b"
+COLOR_LIVE = "#11191e"
+COLOR_LIVE_CAPTION = "#7f97a3"
+COLOR_GRID = "#1e2c33"
+COLOR_ZERO_LINE = "#31474f"
+COLOR_WAVE_FILL = "#2f7d8a"
+COLOR_WAVE_EDGE = "#6fd3de"
+COLOR_WAVE_FILL_STALE = "#25373d"
+COLOR_WAVE_EDGE_STALE = "#41565d"
+COLOR_METER_TRACK = "#1b262b"
+COLOR_METER_QUIET = "#3d7c88"
+COLOR_METER_LOUD = "#35a37f"
+COLOR_METER_TICK = "#c9d6db"
+COLOR_BADGE_IDLE_BG = "#1e2c33"
+COLOR_BADGE_IDLE_FG = "#7f97a3"
+COLOR_BADGE_SPEECH_BG = "#1d7a5f"
+COLOR_BADGE_SPEECH_FG = "#eafaf4"
+COLOR_SCORE_BAR_KEYWORD = "#2f7d8a"
+COLOR_SCORE_BAR_TRIGGERED = "#1d8568"
+COLOR_SCORE_TRACK = "#e3e9ec"
+COLOR_SCORE_THRESHOLD = "#93a6af"
 COLOR_OK = "#287c68"
 COLOR_WARN = "#a16a1c"
 COLOR_ERROR = "#a84038"
@@ -222,6 +236,9 @@ class AudioResult:
     chiming_count: int
     detections: int
     envelope: Tuple[int, ...]
+    # Kept because the parser has to walk past these bytes to reach the scores,
+    # and because the headless decoder in the repository's development notes
+    # reads them. The window no longer draws them.
     features: bytes
     scores: Tuple[float, ...]
 
@@ -353,39 +370,6 @@ def parse_audio_result(payload: bytes) -> AudioResult:
     )
 
 
-def build_feature_palette(shade_window: Tuple[int, int]) -> bytes:
-    """Map every model input byte to an RGB triple, ready to index by value.
-
-    Folds the shading window into the table, so rendering a frame stays a
-    lookup per coefficient.
-
-    Args:
-        shade_window: Byte values that map to the ends of the colour ramp.
-    """
-    low, high = shade_window
-    palette = bytearray()
-    for value in range(256):
-        shade = (value - low) * 255.0 / (high - low)
-        shade = max(0.0, min(255.0, shade))
-        lower, upper = SPECTROGRAM_RAMP[0], SPECTROGRAM_RAMP[-1]
-        for index in range(len(SPECTROGRAM_RAMP) - 1):
-            if SPECTROGRAM_RAMP[index][0] <= shade <= SPECTROGRAM_RAMP[index + 1][0]:
-                lower, upper = SPECTROGRAM_RAMP[index], SPECTROGRAM_RAMP[index + 1]
-                break
-        span = upper[0] - lower[0]
-        weight = 0.0 if span == 0 else (shade - lower[0]) / span
-        palette.extend(
-            round(lower[1][channel] + weight * (upper[1][channel] - lower[1][channel]))
-            for channel in range(3)
-        )
-    return bytes(palette)
-
-
-ENERGY_PALETTE = build_feature_palette(SPECTROGRAM_ENERGY_SHADE)
-SHAPE_PALETTE = build_feature_palette(SPECTROGRAM_SHAPE_SHADE)
-IDLE_PIXEL = bytes(int(COLOR_SPECTROGRAM_IDLE[i : i + 2], 16) for i in (1, 3, 5))
-
-
 def dbfs(amplitude: float) -> float:
     """Convert a linear amplitude to dB relative to 16-bit full scale."""
     return 20.0 * math.log10(max(amplitude, 1.0) / FULL_SCALE)
@@ -430,10 +414,6 @@ class KeywordSpottingWindow:
         self._columns: Deque[Tuple[int, int]] = deque(
             [(0, 0)] * WINDOW_COLUMNS, maxlen=WINDOW_COLUMNS
         )
-        self._features: Deque[Optional[bytes]] = deque(
-            [None] * SPECTROGRAM_COLUMNS, maxlen=SPECTROGRAM_COLUMNS
-        )
-        self._spectrogram_image: Optional[tk.PhotoImage] = None
         self._scores_shown: Tuple[float, ...] = ()
         self._triggered_class = -1
         self._last_detections = -1
@@ -555,7 +535,8 @@ class KeywordSpottingWindow:
         card = tk.Frame(parent, bg=COLOR_LIVE, padx=16, pady=12)
         card.pack(fill="both", expand=True)
         card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, minsize=260)
+        card.columnconfigure(1, minsize=170)
+        card.columnconfigure(2, minsize=70)
         card.rowconfigure(1, weight=1)
 
         self._view_caption = tk.Label(
@@ -578,37 +559,10 @@ class KeywordSpottingWindow:
             width=WIDTH_SCALE_CAPTION,
         )
         self._scale_label.grid(row=0, column=1, sticky="e")
-
-        self._canvas = tk.Canvas(
-            card,
-            bg=COLOR_LIVE,
-            highlightthickness=0,
-            bd=0,
-            height=120,
-        )
-        self._canvas.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(8, 12))
-        self._canvas.bind("<Configure>", self._on_canvas_resize)
-        self._grid_lines = [
-            self._canvas.create_line(0, 0, 0, 0, fill=COLOR_GRID) for _ in range(2)
-        ]
-        self._zero_line = self._canvas.create_line(0, 0, 0, 0, fill=COLOR_ZERO_LINE)
-        self._wave = self._canvas.create_polygon(
-            0, 0, 0, 0, 0, 0, fill=COLOR_WAVE_FILL, outline=COLOR_WAVE_EDGE, width=1
-        )
-
-        tk.Label(
-            card,
-            text=(
-                "MFCC FEATURES   shading  energy "
-                f"{SPECTROGRAM_ENERGY_SHADE[0]} to {SPECTROGRAM_ENERGY_SHADE[1]}"
-                f"   others {SPECTROGRAM_SHAPE_SHADE[0]} to "
-                f"{SPECTROGRAM_SHAPE_SHADE[1]}"
-            ),
-            bg=COLOR_LIVE,
-            fg=COLOR_LIVE_CAPTION,
-            font=("TkDefaultFont", 9, "bold"),
-            anchor="w",
-        ).grid(row=2, column=0, sticky="w")
+        # The speech gate used to be visible as the gap in the feature strip.
+        # With the strip gone this badge is the only thing showing it, so it
+        # sits with the waveform it gates rather than in the result card, where
+        # a detection would hide it.
         self._speech_badge = tk.Label(
             card,
             text="IDLE",
@@ -619,15 +573,27 @@ class KeywordSpottingWindow:
             padx=6,
             pady=2,
         )
-        self._speech_badge.grid(row=2, column=1, sticky="e")
+        self._speech_badge.grid(row=0, column=2, sticky="e", padx=(12, 0))
 
-        self._spectrogram = tk.Label(card, bg=COLOR_LIVE, bd=0)
-        self._spectrogram.grid(
-            row=3, column=0, columnspan=2, sticky="nsew", pady=(6, 12)
+        self._canvas = tk.Canvas(
+            card,
+            bg=COLOR_LIVE,
+            highlightthickness=0,
+            bd=0,
+            height=120,
+        )
+        self._canvas.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=(10, 12))
+        self._canvas.bind("<Configure>", self._on_canvas_resize)
+        self._grid_lines = [
+            self._canvas.create_line(0, 0, 0, 0, fill=COLOR_GRID) for _ in range(2)
+        ]
+        self._zero_line = self._canvas.create_line(0, 0, 0, 0, fill=COLOR_ZERO_LINE)
+        self._wave = self._canvas.create_polygon(
+            0, 0, 0, 0, 0, 0, fill=COLOR_WAVE_FILL, outline=COLOR_WAVE_EDGE, width=1
         )
 
         meter_row = tk.Frame(card, bg=COLOR_LIVE)
-        meter_row.grid(row=4, column=0, columnspan=2, sticky="ew")
+        meter_row.grid(row=2, column=0, columnspan=3, sticky="ew")
         meter_row.columnconfigure(0, weight=1)
         self._meter = tk.Canvas(
             meter_row, bg=COLOR_LIVE, highlightthickness=0, bd=0, height=18
@@ -747,17 +713,13 @@ class KeywordSpottingWindow:
         )
 
     def _clear_live_view(self) -> None:
-        """Blank the waveform, features and meter so a dead link cannot look live."""
+        """Blank the waveform and meter so a dead link cannot look live."""
         self._mark_stale()
         self._columns = deque([(0, 0)] * WINDOW_COLUMNS, maxlen=WINDOW_COLUMNS)
-        self._features = deque(
-            [None] * SPECTROGRAM_COLUMNS, maxlen=SPECTROGRAM_COLUMNS
-        )
         self._scale = SCALE_FLOOR
         self._level_dbfs = METER_FLOOR_DBFS
         self._set_speech_badge(False)
         self._redraw_waveform()
-        self._redraw_spectrogram()
         self._redraw_meter()
         set_text(self._scale_label, self._scale_caption())
         set_text(self._level_label, "rms    --       -- dBFS")
@@ -855,16 +817,6 @@ class KeywordSpottingWindow:
             self._prediction_label.configure(text="Say a keyword", fg=COLOR_MUTED)
         self._redraw_meter()
 
-    def _append_features(self, result: AudioResult) -> None:
-        """Add this block's feature frames, or an idle gap when it produced none."""
-        coefficients = self._config.mfcc_coefficients if self._config else 10
-        if result.mfcc_frames == 0:
-            self._features.extend([None] * SPECTROGRAM_FRAMES_PER_BLOCK)
-            return
-        for frame in range(result.mfcc_frames):
-            start = frame * coefficients
-            self._features.append(result.features[start : start + coefficients])
-
     def _window_seconds(self) -> float:
         """Length of audio the live view holds, in seconds."""
         assert self._config is not None
@@ -913,30 +865,6 @@ class KeywordSpottingWindow:
         ]
         self._canvas.coords(self._wave, *coordinates)
 
-    def _redraw_spectrogram(self) -> None:
-        """Repaint the feature strip from the column history.
-
-        Built as a small PPM, one pixel per coefficient, and magnified by Tk
-        rather than assembled at display size, which keeps the per-block cost
-        to a few thousand bytes of Python work.
-        """
-        rows = self._config.mfcc_coefficients if self._config else 10
-        raster = bytearray()
-        for row in range(rows):
-            palette = ENERGY_PALETTE if row == 0 else SHAPE_PALETTE
-            for column in self._features:
-                if column is None:
-                    raster.extend(IDLE_PIXEL)
-                else:
-                    value = column[row]
-                    raster.extend(palette[3 * value : 3 * value + 3])
-        header = f"P6\n{SPECTROGRAM_COLUMNS} {rows}\n255\n".encode("ascii")
-        image = tk.PhotoImage(data=bytes(header) + bytes(raster), format="PPM")
-        image = image.zoom(SPECTROGRAM_ZOOM_X, SPECTROGRAM_ZOOM_Y)
-        self._spectrogram.configure(image=image)
-        # Tk does not own the image, so the reference has to be kept here.
-        self._spectrogram_image = image
-
     def _set_speech_badge(self, active: bool) -> None:
         """Show whether spark's speech gate is passing audio to the front end."""
         wanted = "SPEECH" if active else "IDLE"
@@ -980,12 +908,10 @@ class KeywordSpottingWindow:
                 fg=COLOR_OK if result.speech_active else COLOR_MUTED,
             )
         self._columns.extend(aggregate_columns(result.envelope, COLUMNS_PER_BLOCK))
-        self._append_features(result)
         self._update_scale()
         self._level_dbfs = dbfs(result.rms)
         self._set_speech_badge(bool(result.speech_active))
         self._redraw_waveform()
-        self._redraw_spectrogram()
         self._redraw_meter()
 
         set_text(self._scale_label, self._scale_caption())

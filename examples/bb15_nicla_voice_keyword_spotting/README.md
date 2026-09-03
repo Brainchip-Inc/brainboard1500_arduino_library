@@ -76,12 +76,17 @@ configurable.
   against the 0.50 score threshold. `silence` and `unknown` are hidden here
   because they cannot trigger; the device still sends them.
 - **Waveform**: the DC-blocked microphone signal over the last 3.6 seconds.
-- **MFCC features**: one column per frame, aligned to the waveform above it.
-  Blocks the speech gate suppressed produce no frames and appear as a gap, so
-  the gap is the gating.
-- **SPEECH / IDLE badge**: spark's voice activity state. It stays on `SPEECH`
-  through short pauses, because the gate holds open for 1300 ms after the last
-  block above the RMS threshold.
+- **SPEECH / IDLE badge**, at the top right of the waveform: spark's voice
+  activity state, which decides whether a block reaches the MFCC front end at
+  all. It stays on `SPEECH` through short pauses, because the gate holds open
+  for 1300 ms after the last block above the RMS threshold, and the `features`
+  time in the telemetry row drops to `0 ms` whenever it reads `IDLE`.
+- **Level meter**, under the waveform: block RMS in dBFS, with a tick at the
+  RMS threshold the gate uses.
+
+The MFCC features themselves are not drawn. The device still computes and
+transmits them, and the packet still carries them, so a tool that wants them
+has them.
 
 Say a keyword close to the board. A detection needs the class to hold above
 0.50 for three consecutive inferences, so a single ambiguous frame will not
