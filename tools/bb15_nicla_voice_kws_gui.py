@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Live USB view for `bb15_nicla_voice_keyword_spotting`.
 
 Requirements:
@@ -19,10 +18,8 @@ import time
 import tkinter as tk
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, List, Optional, Tuple
 
 import serial
-
 
 MAGIC = b"BB15"
 VERSION = 1
@@ -46,8 +43,18 @@ DEVICE_ERRORS = {
 # From spark's kws_new_tags[], matching the silence and unknown class indices
 # in the model's info.yaml. Neither of those two can trigger a detection.
 CLASS_LABELS = (
-    "down", "go", "left", "no", "off", "on",
-    "right", "stop", "up", "yes", "silence", "unknown",
+    "down",
+    "go",
+    "left",
+    "no",
+    "off",
+    "on",
+    "right",
+    "stop",
+    "up",
+    "yes",
+    "silence",
+    "unknown",
 )
 SILENCE_CLASS = 10
 UNKNOWN_CLASS = 11
@@ -235,12 +242,12 @@ class AudioResult:
     mfcc_frames: int
     chiming_count: int
     detections: int
-    envelope: Tuple[int, ...]
+    envelope: tuple[int, ...]
     # Kept because the parser has to walk past these bytes to reach the scores,
     # and because the headless decoder in the repository's development notes
     # reads them. The window no longer draws them.
     features: bytes
-    scores: Tuple[float, ...]
+    scores: tuple[float, ...]
 
 
 def parse_args() -> argparse.Namespace:
@@ -250,7 +257,10 @@ def parse_args() -> argparse.Namespace:
         "--port", required=True, help="Serial device, e.g. /dev/cu.usbmodem9AD4C4763"
     )
     parser.add_argument(
-        "--baud", type=int, default=921600, help="USB CDC baud setting used by the sketch"
+        "--baud",
+        type=int,
+        default=921600,
+        help="USB CDC baud setting used by the sketch",
     )
     return parser.parse_args()
 
@@ -270,7 +280,7 @@ class PacketReader:
         """Add newly received bytes to the reassembly buffer."""
         self._buffer.extend(data)
 
-    def next_packet(self) -> Optional[Tuple[int, bytes]]:
+    def next_packet(self) -> tuple[int, bytes] | None:
         """Return the next complete message, or None if one is not ready yet."""
         while True:
             start = self._buffer.find(MAGIC)
@@ -381,9 +391,7 @@ def set_text(widget: tk.Label, text: str) -> None:
         widget.configure(text=text)
 
 
-def aggregate_columns(
-    envelope: Tuple[int, ...], columns: int
-) -> List[Tuple[int, int]]:
+def aggregate_columns(envelope: tuple[int, ...], columns: int) -> list[tuple[int, int]]:
     """Reduce a block's min/max envelope to a fixed number of display columns.
 
     Args:
@@ -411,17 +419,17 @@ class KeywordSpottingWindow:
     def __init__(self, root: tk.Tk, port_name: str) -> None:
         self._root = root
         self._port_name = port_name
-        self._columns: Deque[Tuple[int, int]] = deque(
+        self._columns: deque[tuple[int, int]] = deque(
             [(0, 0)] * WINDOW_COLUMNS, maxlen=WINDOW_COLUMNS
         )
-        self._scores_shown: Tuple[float, ...] = ()
+        self._scores_shown: tuple[float, ...] = ()
         self._triggered_class = -1
         self._last_detections = -1
         self._detected_at = 0.0
         self._scale = SCALE_FLOOR
         self._level_dbfs = METER_FLOOR_DBFS
         self._live = True
-        self._config: Optional[AudioConfig] = None
+        self._config: AudioConfig | None = None
         self._canvas_width = 1
         self._canvas_height = 1
 
@@ -516,7 +524,9 @@ class KeywordSpottingWindow:
         self._score_names = []
         for class_index in DISPLAY_CLASSES:
             self._score_tracks.append(
-                self._scores.create_rectangle(0, 0, 0, 0, fill=COLOR_SCORE_TRACK, width=0)
+                self._scores.create_rectangle(
+                    0, 0, 0, 0, fill=COLOR_SCORE_TRACK, width=0
+                )
             )
             self._score_bars.append(
                 self._scores.create_rectangle(
@@ -525,8 +535,12 @@ class KeywordSpottingWindow:
             )
             self._score_names.append(
                 self._scores.create_text(
-                    0, 0, text=CLASS_LABELS[class_index], fill=COLOR_MUTED,
-                    anchor="n", font=("TkDefaultFont", 8),
+                    0,
+                    0,
+                    text=CLASS_LABELS[class_index],
+                    fill=COLOR_MUTED,
+                    anchor="n",
+                    font=("TkDefaultFont", 8),
                 )
             )
 
@@ -653,15 +667,21 @@ class KeywordSpottingWindow:
         for index in range(len(DISPLAY_CLASSES)):
             left = index * slot + (slot - bar_width) / 2.0
             self._scores.coords(
-                self._score_tracks[index], left, 0, left + bar_width,
+                self._score_tracks[index],
+                left,
+                0,
+                left + bar_width,
                 self._score_bar_height,
             )
             self._scores.coords(
-                self._score_names[index], left + bar_width / 2.0,
+                self._score_names[index],
+                left + bar_width / 2.0,
                 self._score_bar_height + 3,
             )
         threshold_y = self._score_bar_height * (1.0 - 0.5)
-        self._scores.coords(self._score_threshold_line, 0, threshold_y, width, threshold_y)
+        self._scores.coords(
+            self._score_threshold_line, 0, threshold_y, width, threshold_y
+        )
         self._redraw_scores()
 
     def _redraw_scores(self) -> None:
@@ -728,9 +748,7 @@ class KeywordSpottingWindow:
         """Show that the tool is waiting for the device to answer."""
         self._clear_live_view()
         self._result_title.configure(text="CONNECTING", fg=COLOR_WARN)
-        self._prediction_label.configure(
-            text="Waiting for microphone", fg=COLOR_TEXT
-        )
+        self._prediction_label.configure(text="Waiting for microphone", fg=COLOR_TEXT)
         self._score_label.configure(text="not loaded")
         self._connection_label.configure(text="CONNECTING", fg=COLOR_WARN)
         set_text(
@@ -834,9 +852,7 @@ class KeywordSpottingWindow:
 
     def _scale_caption(self) -> str:
         """State the current vertical scale, rounded so the caption stays calm."""
-        unit = 10 ** max(
-            0, int(math.log10(self._scale)) - (SCALE_CAPTION_DIGITS - 1)
-        )
+        unit = 10 ** max(0, int(math.log10(self._scale)) - (SCALE_CAPTION_DIGITS - 1))
         return f"full scale \u00b1{int(round(self._scale / unit) * unit)}"
 
     def _redraw_waveform(self) -> None:
@@ -848,8 +864,8 @@ class KeywordSpottingWindow:
         columns = len(self._columns)
         if columns < 2 or width < 2:
             return
-        upper: List[float] = []
-        lower: List[float] = []
+        upper: list[float] = []
+        lower: list[float] = []
         for index, (lowest, highest) in enumerate(self._columns):
             x = index * (width - 1) / (columns - 1)
             upper.append(x)
@@ -889,9 +905,7 @@ class KeywordSpottingWindow:
             self._meter.coords(self._meter_tick, 0, 0, 0, 0)
             return
         threshold = dbfs(self._config.rms_threshold)
-        tick = max(
-            0.0, min(1.0, (threshold - METER_FLOOR_DBFS) / -METER_FLOOR_DBFS)
-        )
+        tick = max(0.0, min(1.0, (threshold - METER_FLOOR_DBFS) / -METER_FLOOR_DBFS))
         self._meter.coords(self._meter_tick, width * tick, 1, width * tick, 17)
         wanted = COLOR_METER_LOUD if level >= threshold else COLOR_METER_QUIET
         if self._meter.itemcget(self._meter_fill, "fill") != wanted:
@@ -936,8 +950,10 @@ def read_available(port: serial.Serial) -> bytes:
 
 
 def negotiate_stream(
-    port: serial.Serial, reader: PacketReader, window: KeywordSpottingWindow,
-    root: tk.Tk
+    port: serial.Serial,
+    reader: PacketReader,
+    window: KeywordSpottingWindow,
+    root: tk.Tk,
 ) -> AudioConfig:
     """Ask the device for its pipeline description and start its stream.
 
@@ -987,7 +1003,7 @@ def main() -> int:
         running = False
 
     root.protocol("WM_DELETE_WINDOW", close_window)
-    port: Optional[serial.Serial] = None
+    port: serial.Serial | None = None
     reader = PacketReader()
     stream_started = False
     last_result_at = time.monotonic()
