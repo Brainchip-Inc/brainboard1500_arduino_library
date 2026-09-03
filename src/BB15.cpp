@@ -239,6 +239,25 @@ BB15Pinout BB15Pinout::niclaSenseMeDefaults() {
   return pinout;
 }
 
+// Derived from the Nicla Voice pinout and the BB15 v2 edge connector sheet.
+//
+// The interrupt and TT_MODE lines are shared nets, also reaching NDP120 GPIO15
+// and GPIO6 through the header translators, so they are safe only while the
+// NDP120 firmware leaves those GPIOs alone.
+BB15Pinout BB15Pinout::niclaVoiceDefaults() {
+  BB15Pinout pinout;
+  pinout.host.boardReset = 10u;
+  pinout.host.akidaCs = 6u;
+  pinout.host.ttModeCs = 0u;
+  pinout.host.interrupt = 5u;
+  pinout.akidaReset.route = BB15ResetRoute::Expander;
+  pinout.akidaReset.pin = 4u;
+  pinout.expander.bootMode = 0u;
+  pinout.expander.akidaSleep = 3u;
+  pinout.expander.akidaInterrupt = 2u;
+  return pinout;
+}
+
 BB15Model::BB15Model(const uint8_t* data, size_t size)
     : data_(data), size_(size), external_address_(0x80000000u) {
   info_.serializedSize = size_;

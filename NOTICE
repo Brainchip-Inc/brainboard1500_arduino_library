@@ -8,9 +8,14 @@ The repository's own license is MIT, in `LICENSE`. Some files in this tree
 carry a different license statement, and some carry none. This file reports
 what those files declare, as text. It draws no conclusions beyond that.
 
-Entries below were produced by reading every tracked file in the tree, other
-than the two files added by the change that introduced this file (`NOTICE`
-and `LICENSE-APACHE-2.0`). That is 155 files.
+Sections 1 to 3 were produced by reading every tracked file in the tree as it
+stood when this file was added, other than the two files added by that same
+change (`NOTICE` and `LICENSE-APACHE-2.0`). That was 155 files. Their counts
+and file lists describe that snapshot and have not been re-derived since.
+
+Sections 4 and 5 cover the components added by the Nicla Voice keyword
+spotting demo, and were produced the same way over the files that change
+adds.
 
 
 --------------------------------------------------------------------------
@@ -233,3 +238,101 @@ Additional observations, stated as facts about file contents only:
     `gc2145.h`. Those headers are not present in this repository; they are
     resolved from the Arduino core at build time and are not covered by
     this file.
+
+
+--------------------------------------------------------------------------
+4. Kiss FFT (vendored C sources)
+--------------------------------------------------------------------------
+
+Component:   Kiss FFT
+Upstream:    https://github.com/mborgerding/kissfft
+
+Paths:       examples/bb15_nicla_voice_keyword_spotting/kiss_fft.c
+             examples/bb15_nicla_voice_keyword_spotting/kiss_fft.h
+             examples/bb15_nicla_voice_keyword_spotting/kiss_fftr.c
+             examples/bb15_nicla_voice_keyword_spotting/kiss_fftr.h
+
+             Vendored unmodified. Each of the four files is byte-for-byte
+             identical to the copy under
+             `source/core/common/audio/kissfft/` in BrainChip's spark
+             repository, which is where they were taken from.
+
+License:     BSD 3-Clause License
+
+             Declared by each file:
+                 SPDX-License-Identifier: BSD-3-Clause
+
+             `kiss_fft.h` carries the full license text: the copyright
+             notice, the three conditions, and the disclaimer.
+             `kiss_fft.c`, `kiss_fftr.h` and `kiss_fftr.c` each carry the
+             copyright notice and the SPDX identifier, and refer to
+             `kiss_fft.h` for the full text.
+
+Copyright:   Copyright (c) 2003-2010, Mark Borgerding. All rights reserved.
+
+Notes:       No separate license file was added for BSD-3-Clause, unlike
+             `LICENSE-APACHE-2.0`. The two cases differ. The Apache-2.0
+             files in this tree carry only a header that references
+             http://www.apache.org/licenses/LICENSE-2.0, so the license
+             text itself was not otherwise present. BSD-3-Clause requires
+             that redistributions of source code "retain the above
+             copyright notice, this list of conditions and the following
+             disclaimer", and the vendored `kiss_fft.h` retains exactly
+             that, in full, in the tree. A separate file would duplicate
+             text already present and could drift from it.
+
+             This is a statement about what the files contain and what the
+             license text asks for. It is not legal advice.
+
+
+--------------------------------------------------------------------------
+5. MFCC arithmetic derived from Arm ML-KWS-for-MCU
+--------------------------------------------------------------------------
+
+Paths:       examples/bb15_nicla_voice_keyword_spotting/mfcc.h
+             examples/bb15_nicla_voice_keyword_spotting/mfcc.cpp
+
+             These two files are new code rather than copies. They
+             reproduce, value for value, the MFCC feature extraction that
+             BrainChip's spark repository carries at
+             `source/core/common/audio/mfcc.c`, which is itself derived
+             from Arm's ML-KWS-for-MCU.
+
+License:     Apache License, Version 2.0
+
+             `mfcc.h` carries the attribution block, including the SPDX
+             identifier and the license URL. `mfcc.cpp` refers to it. A
+             copy of the license text is in `LICENSE-APACHE-2.0`.
+
+Copyright:   Copyright (C) 2018 Arm Limited or its affiliates.
+             All rights reserved.
+
+             That is the notice carried by the upstream file the
+             arithmetic comes from. The files in this tree add no
+             copyright notice of their own.
+
+
+--------------------------------------------------------------------------
+6. Files added by the Nicla Voice demo carrying no license statement
+--------------------------------------------------------------------------
+
+The Nicla Voice keyword spotting demo adds 12 tracked files. Six of them
+declare a license and are covered by sections 4 and 5 above. The other six
+carry no copyright notice, no license header, and no SPDX identifier:
+
+    examples/bb15_nicla_voice_keyword_spotting/
+      bb15_nicla_voice_keyword_spotting.ino
+      model_metadata.cpp
+      model_metadata.h
+      program.cpp
+      program.h
+
+    tools/
+      bb15_nicla_voice_kws_gui.py
+
+License:     Undetermined from file contents.
+
+Notes:       `program.cpp` is a 22,112-byte embedded model array, and
+             `model_metadata.cpp` names the artifact it was produced from,
+             the same arrangement as the five older `examples/*/program.cpp`
+             files described in section 3.
