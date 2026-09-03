@@ -136,15 +136,35 @@ bridge, not by the nRF52832 (datasheet section 4.8). The board can therefore
 enumerate, list correctly under `arduino-cli board list`, and hand you a serial
 port while the nRF52832 is running something else entirely or nothing at all.
 
-If the tool sits on `CONNECTING` and nothing arrives:
+**Listen before concluding anything.** While it is not streaming, the sketch
+reports itself every two seconds, so a plain terminal is enough to tell a
+healthy board from a wedged one:
 
-1. **Check what is on the board.** Any other sketch, including a debugging
-   build, leaves this demo silent in a way that looks exactly like a broken
-   tool. Re-upload this example.
-2. **If the sketch is the one on the board**, a bring-up failure now reports
-   itself: the sketch answers any host command with an error packet for as long
-   as it is powered, and the tool prints the reason rather than waiting. A
-   failure to start the NDP120 usually clears with a power cycle.
+```bash
+PORT=/dev/cu.usbmodem9AD4C4763
+stty -f $PORT 921600 raw && head -c 400 $PORT
+```
+
+Three outcomes, and they mean different things:
+
+| what you see | what it means |
+| --- | --- |
+| `idle ready=1 waiting_for_start_stream` | The board is fine. It is waiting to be asked, and the tool simply needs to ask again. |
+| `idle result=FAIL status=0x..` | Bring-up failed and the sketch is saying which stage. `0x81` is the MFCC front end, `0x82` the NDP120 microphone, `0x83` BB15. A power cycle is the first thing to try. |
+| nothing at all | Either it is still inside its ten-second boot, or something is genuinely wrong. Wait fifteen seconds and look again before treating it as broken. |
+
+**Do not diagnose this board by sending one command once.** Opening the port
+reconfigures the USB bridge's UART, and a request written immediately afterwards
+is lost more often than not: measured on a healthy, streaming board, a single
+open-write-read attempt came back empty nine times in fifteen. Retrying the
+request for a few seconds, which the bundled tool does, brings that down to
+roughly one in twelve. A board that fails a single-shot probe is usually a
+healthy board that was asked at the wrong moment.
+
+If the terminal shows nothing after a fifteen-second look, then check what is
+actually on the board: any other sketch, including a debugging build, leaves
+this demo silent in a way that looks exactly like a broken tool. Re-upload this
+example.
 
 The board is its own debug probe, so `arduino-cli upload` works over the same
 USB cable with no external hardware. openocd finds the onboard CMSIS-DAP at

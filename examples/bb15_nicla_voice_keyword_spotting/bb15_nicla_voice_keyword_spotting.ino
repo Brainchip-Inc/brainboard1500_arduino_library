@@ -25,6 +25,13 @@ namespace {
 constexpr uint32_t kSerialBaud = 921600u;
 constexpr uint32_t kBootSettleMs = 250u;
 
+// A board that is waiting for a stream used to say nothing at all, which makes
+// it indistinguishable from a dead one to anything that is only listening. It
+// now reports itself on this interval instead, so a plain terminal is enough to
+// tell a healthy idle board from a wedged one, and so a setup failure is
+// visible without having to ask for it at the right moment.
+constexpr uint32_t kIdleReportMs = 2000u;
+
 // The NDP120 firmware packages already stored in the board's on-board QSPI
 // flash. All three are required: with only the MCU and DSP packages loaded the
 // audio holding tank never advances, so extractData keeps returning the same
@@ -245,6 +252,7 @@ bool g_streaming = false;
 // the reason instead of going quiet, because a setup message printed once at
 // boot is gone by the time a desktop tool opens the port.
 uint8_t g_setup_failure = kStatusOk;
+uint32_t g_next_idle_report_ms = 0u;
 
 /**
  * @brief Clamp a millisecond duration into the packet's 16-bit field.
@@ -274,6 +282,26 @@ void fail_setup(const char* stage, uint8_t status) {
   Serial.print(kLogPrefix);
   Serial.print(" result=FAIL stage=");
   Serial.println(stage);
+}
+
+/**
+ * @brief Say what the board is doing, at most once per kIdleReportMs.
+ *
+ * Text rather than a packet, so a plain terminal shows it and the desktop
+ * tool's framing skips it the way it skips the boot banner.
+ */
+void report_idle_state() {
+  if (static_cast<int32_t>(millis() - g_next_idle_report_ms) < 0) {
+    return;
+  }
+  g_next_idle_report_ms = millis() + kIdleReportMs;
+  Serial.print(kLogPrefix);
+  if (g_setup_failure != kStatusOk) {
+    Serial.print(" idle result=FAIL status=0x");
+    Serial.println(g_setup_failure, HEX);
+    return;
+  }
+  Serial.println(" idle ready=1 waiting_for_start_stream");
 }
 
 /**
@@ -989,6 +1017,7 @@ void loop() {
     if (command != static_cast<PacketType>(0u)) {
       send_error_packet(g_setup_failure);
     }
+    report_idle_state();
     set_led(red);
     delay(50);
     set_led(off);
@@ -1012,6 +1041,7 @@ void loop() {
     return;
   }
   if (!g_streaming) {
+    report_idle_state();
     delay(1);
     return;
   }
