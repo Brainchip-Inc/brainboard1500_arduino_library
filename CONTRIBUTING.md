@@ -68,3 +68,16 @@ One nuance from that file is worth knowing before you write the commit rather th
 upstream Neuromorphyx does not use Conventional Commits. A commit destined for a pull request
 back to Neuromorphyx should match upstream's plain-sentence style instead, so their history
 stays consistent.
+
+That format is checked by CI rather than left to habit. Two required checks run on every pull
+request into `main`:
+
+- **format** rejects a pull request title, or any commit subject on the branch, that is not
+  `type(scope): concise message`. `main` is squash-only and GitHub builds the squash subject
+  from the pull request title, so the title is the one that ends up in history.
+- **lint** runs the linters over the files the pull request changed, and only those.
+
+A rejected subject is fixed with `git rebase -i` and a force push of your own branch. The
+checks and what they cover live in `.github/workflows/ci-gates-*.yml` and
+`.github/ci-gates/`, and the lint gate deliberately skips this repository's vendored and
+generated trees, which `.github/ci-gates/ci-gates.conf` lists and explains.
