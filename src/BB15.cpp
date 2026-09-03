@@ -112,7 +112,8 @@ BB15RunResult make_run_result(const akida::Dense& dense) {
   result.dimensions = dense.dimensions();
   result.bytes.resize(dense.buffer()->size());
   if (!result.bytes.empty()) {
-    std::memcpy(result.bytes.data(), dense.buffer()->data(), result.bytes.size());
+    std::memcpy(result.bytes.data(), dense.buffer()->data(),
+                result.bytes.size());
   }
   result.predictedIndex = best_index_for_dense_output(dense);
   return result;
@@ -327,7 +328,8 @@ bool BB15::ensureLowLevelBoard() {
   config.external_program_data_address = config_.defaultModelAddress;
   config.expected_ip_version = config_.expectedIpVersion;
   config.forced_flash_profile = config_.forcedFlashProfile;
-  config.assume_forced_flash_profile_ready = config_.assumeForcedFlashProfileReady;
+  config.assume_forced_flash_profile_ready =
+      config_.assumeForcedFlashProfileReady;
   low_level_board_.reset(new bb15::internal::RuntimeBoard(config));
   return true;
 #endif
@@ -343,7 +345,8 @@ uint32_t BB15::logicalFlashOffset(uint32_t address_or_offset) const {
   }
 
   if (address_or_offset >= kExternalModelAliasBase &&
-      address_or_offset < (kExternalModelAliasBase + kExternalModelWindowSize)) {
+      address_or_offset <
+          (kExternalModelAliasBase + kExternalModelWindowSize)) {
     return address_or_offset - kExternalModelAliasBase;
   }
 
@@ -503,13 +506,9 @@ bool BB15::releaseBoardReset() {
   return true;
 }
 
-bool BB15::powerDown() {
-  return holdBoardInReset();
-}
+bool BB15::powerDown() { return holdBoardInReset(); }
 
-bool BB15::powerUp() {
-  return releaseBoardReset();
-}
+bool BB15::powerUp() { return releaseBoardReset(); }
 
 bool BB15::sleep() {
   initialized_ = false;
@@ -610,8 +609,10 @@ BB15Status BB15::begin() {
 
   low_level_board_->begin();
   ip_version_ = low_level_board_->read_ip_version();
-  if (config_.expectedIpVersion != 0u && ip_version_ != config_.expectedIpVersion) {
-    return setError(BB15Status::LinkFailed, "unexpected_ip_version", ip_version_);
+  if (config_.expectedIpVersion != 0u &&
+      ip_version_ != config_.expectedIpVersion) {
+    return setError(BB15Status::LinkFailed, "unexpected_ip_version",
+                    ip_version_);
   }
 
   initialized_ = true;
@@ -640,7 +641,8 @@ bool BB15::detectFlash() {
   const bool ok = low_level_board_->ensure_spi_flash_runtime_profile();
   detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
   detected_flash_name_ = low_level_board_->detected_flash_name();
-  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
+  has_supported_flash_profile_ =
+      low_level_board_->has_supported_flash_profile();
   if (!ok) {
     setError(BB15Status::FlashUnsupported, "flash_detect_failed",
              detected_flash_jedec_);
@@ -703,7 +705,8 @@ bool BB15::s2mExit() {
   s2m_active_ = false;
   detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
   detected_flash_name_ = low_level_board_->detected_flash_name();
-  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
+  has_supported_flash_profile_ =
+      low_level_board_->has_supported_flash_profile();
   last_error_ = make_error(BB15Status::Ok, "ok");
   return true;
 #endif
@@ -736,7 +739,8 @@ bool BB15::programExternalData(const uint8_t* data, size_t size,
   ip_version_ = low_level_board_->read_ip_version();
   detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
   detected_flash_name_ = low_level_board_->detected_flash_name();
-  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
+  has_supported_flash_profile_ =
+      low_level_board_->has_supported_flash_profile();
   if (!ok) {
     setError(BB15Status::FlashStageFailed, "flash_stage_failed");
     return false;
@@ -752,7 +756,8 @@ bool BB15::verifyExternalData(const uint8_t* data, size_t size,
   (void)data;
   (void)size;
   (void)address;
-  setError(BB15Status::TransportStateError, "unsupported_platform_flash_verify");
+  setError(BB15Status::TransportStateError,
+           "unsupported_platform_flash_verify");
   return false;
 #else
   if (data == nullptr || size == 0u) {
@@ -773,7 +778,8 @@ bool BB15::verifyExternalData(const uint8_t* data, size_t size,
   ip_version_ = low_level_board_->read_ip_version();
   detected_flash_jedec_ = low_level_board_->detected_flash_jedec();
   detected_flash_name_ = low_level_board_->detected_flash_name();
-  has_supported_flash_profile_ = low_level_board_->has_supported_flash_profile();
+  has_supported_flash_profile_ =
+      low_level_board_->has_supported_flash_profile();
   if (!ok) {
     setError(BB15Status::FlashVerifyFailed, "flash_verify_failed");
     return false;
@@ -806,8 +812,8 @@ bool BB15::readExternalData(uint32_t address, uint8_t* out, size_t size) {
     return false;
   }
 
-  const bool ok =
-      low_level_board_->read_bridge_flash(logicalFlashOffset(address), out, size);
+  const bool ok = low_level_board_->read_bridge_flash(
+      logicalFlashOffset(address), out, size);
   if (!ok) {
     setError(BB15Status::TransportStateError, "read_external_data_failed",
              logicalFlashOffset(address));
@@ -824,7 +830,8 @@ bool BB15::flashModel(const BB15Model& model) {
     setError(BB15Status::ModelInvalid, "invalid_model");
     return false;
   }
-  return programExternalData(model.data(), model.size(), model.externalAddress());
+  return programExternalData(model.data(), model.size(),
+                             model.externalAddress());
 }
 
 bool BB15::verifyModel(const BB15Model& model) {
@@ -958,13 +965,15 @@ BB15Status BB15Runner::enqueue(const BB15Input& input) {
   }
 
 #if !AKD1500_PLATFORM_SUPPORTED
-  return setError(BB15Status::TransportStateError, "unsupported_platform_enqueue");
+  return setError(BB15Status::TransportStateError,
+                  "unsupported_platform_enqueue");
 #else
   akida::HardwareDevice* device = backend_->hardwareDevice();
   akida::HardwareDriver* driver = backend_->hardwareDriver();
   const akida::ProgramInfo* program_info = backend_->programInfo();
   if (device == nullptr || driver == nullptr || program_info == nullptr) {
-    return setError(BB15Status::TransportStateError, "runtime_handles_unavailable");
+    return setError(BB15Status::TransportStateError,
+                    "runtime_handles_unavailable");
   }
 
   auto input_tensor = akida::Dense::create_view(
@@ -1011,7 +1020,8 @@ BB15RunResult BB15Runner::fetch() {
   if (!inference_in_flight_) {
     BB15RunResult result;
     result.status = BB15Status::InvalidInput;
-    result.error = make_error(BB15Status::InvalidInput, "no_inference_in_flight");
+    result.error =
+        make_error(BB15Status::InvalidInput, "no_inference_in_flight");
     setError(result.status, result.error.message, result.error.detail);
     return result;
   }
@@ -1019,8 +1029,8 @@ BB15RunResult BB15Runner::fetch() {
 #if !AKD1500_PLATFORM_SUPPORTED
   BB15RunResult result;
   result.status = BB15Status::TransportStateError;
-  result.error = make_error(BB15Status::TransportStateError,
-                            "unsupported_platform_fetch");
+  result.error =
+      make_error(BB15Status::TransportStateError, "unsupported_platform_fetch");
   setError(result.status, result.error.message, result.error.detail);
   return result;
 #else
@@ -1059,8 +1069,8 @@ BB15RunResult BB15Runner::fetch() {
   if (dense_output == nullptr) {
     BB15RunResult result;
     result.status = BB15Status::OutputFormatMismatch;
-    result.error = make_error(BB15Status::OutputFormatMismatch,
-                              "output_format_mismatch");
+    result.error =
+        make_error(BB15Status::OutputFormatMismatch, "output_format_mismatch");
     inference_in_flight_ = false;
     setError(result.status, result.error.message, result.error.detail);
     return result;
@@ -1101,8 +1111,7 @@ BB15RunResult BB15Runner::infer(const BB15Input& input) {
   return result;
 }
 
-BB15RunResult BB15Runner::infer(const uint8_t* data,
-                                const akida::Shape& dims) {
+BB15RunResult BB15Runner::infer(const uint8_t* data, const akida::Shape& dims) {
   BB15Input input;
   input.data = data;
   input.type = akida::TensorType::uint8;
@@ -1121,8 +1130,7 @@ BB15ClassificationResult BB15Runner::classify(const BB15Input& input) {
 
   const bb15::internal::RuntimeClassificationResult runtime_result =
       backend_->classify(map_input(input));
-  BB15ClassificationResult result =
-      map_classification_result(runtime_result);
+  BB15ClassificationResult result = map_classification_result(runtime_result);
   inference_in_flight_ = false;
   last_error_ = result.error;
   if (result.ok()) {
@@ -1139,7 +1147,8 @@ bool BB15Runner::readRegister32(uint32_t address, uint32_t& value) {
 #if !AKD1500_PLATFORM_SUPPORTED
   (void)address;
   (void)value;
-  setError(BB15Status::TransportStateError, "unsupported_platform_register_read");
+  setError(BB15Status::TransportStateError,
+           "unsupported_platform_register_read");
   return false;
 #else
   if (!ready_ || backend_ == nullptr) {
