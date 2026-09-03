@@ -2,7 +2,12 @@
 
 #include <NDP.h>
 
+#include <BB15.h>
+
+#include "akida/program_info.h"
 #include "mfcc.h"
+#include "model_metadata.h"
+#include "program.h"
 
 // nicla_voice and nicla_sense share the Arduino NICLA variant, so this guard
 // can only reject other families. Building this for Nicla Sense ME compiles but
@@ -55,10 +60,21 @@ constexpr uint16_t kBlockSamples = 960u;
 constexpr uint8_t kMfccFramesPerBlock = kBlockSamples / kMfccHopSamples;
 constexpr uint16_t kSpectrogramFrames = 49u;
 constexpr uint8_t kSpectrogramCoefficients = 10u;
+constexpr uint8_t kClassCount = 12u;
+// Inference runs every third block, about every 180 ms, from spark's
+// g_inference_period in source/core/common/audio/audio_processor.c where
+// ap_counter counts blocks. It is deliberately not once per MFCC frame.
+constexpr uint8_t kInferencePeriodBlocks = 3u;
+// spark's info.yaml for this model: the classifier reports silence and unknown
+// like any other class, and neither can trigger a detection.
+constexpr uint8_t kSilenceClass = 10u;
+constexpr uint8_t kUnknownClass = 11u;
 constexpr uint16_t kRmsThreshold = 550u;
 constexpr uint16_t kSpeechActiveTimeMs = 1300u;
 constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
 constexpr uint16_t kScoreThresholdQ15 = 16384u;
+constexpr float kSmoothingAlpha = 0.70f;
+constexpr float kScoreThreshold = 0.50f;
 constexpr uint16_t kDebounceMs = 300u;
 constexpr uint8_t kChimingThreshold = 3u;
 
@@ -74,6 +90,11 @@ constexpr float kMfccFullScale = 123.56967163085938f;
 // than to 0, so a cleared ring here has to hold 128 to feed the model the same
 // bytes spark would.
 constexpr uint8_t kClearedFeature = 128u;
+
+// BB15 transport. The header lines run through the Nicla Voice's TXB0108
+// translators, which are weak drivers, so this demo clocks the Akida SPI more
+// slowly than the Nicla Vision demo does.
+constexpr uint32_t kAkidaSpiClockHz = 8000000u;
 
 // spark's DC blocking high-pass, from dc_block_process() in
 // spark/source/core/interface/audio/pdm_mic.c. Its output is what spark takes
@@ -106,12 +127,8 @@ constexpr size_t kPacketHeaderBytes = 10u;
 constexpr size_t kAudioConfigBytes = 24u;
 constexpr size_t kAudioResultMetadataBytes = 28u;
 
-// Prediction is not wired up at this stage of the demo. The fields exist in the
-// packet so the layout is final, and carry these placeholders until they do.
+// Sent in the predicted-index field when nothing has been detected.
 constexpr uint8_t kNoPrediction = 0xFFu;
-constexpr uint8_t kNoScores = 0u;
-constexpr uint8_t kNoChiming = 0u;
-constexpr uint16_t kNoTimingMs = 0u;
 constexpr uint8_t kStatusOk = 0u;
 
 // Status values for the error packet. A chunk-capture failure reports the
@@ -119,7 +136,15 @@ constexpr uint8_t kStatusOk = 0u;
 // failures take a range of their own.
 constexpr uint8_t kStatusMfccInitFailed = 0x81u;
 constexpr uint8_t kStatusMicrophoneFailed = 0x82u;
+constexpr uint8_t kStatusAkidaFailed = 0x83u;
 constexpr uint8_t kReservedByte = 0u;
+
+// From spark's kws_new_tags[] in
+// source/apps/demo_apps/sample_input/kws/kws_inputs.cpp, which agrees with the
+// silence and unknown class indices in the model's info.yaml.
+constexpr const char* kClassLabels[kClassCount] = {
+    "down", "go",   "left", "no",  "off",     "on",
+    "right", "stop", "up",  "yes", "silence", "unknown"};
 
 constexpr const char* kSketchName = "bb15_nicla_voice_keyword_spotting";
 constexpr const char* kLogPrefix = "[bb15_nicla_voice_keyword_spotting]";
@@ -139,6 +164,19 @@ struct AudioBlock {
 enum class SpeechState : uint8_t {
   Idle,
   Active,
+};
+
+/** @brief The Akida runtime state this demo keeps across blocks. */
+struct Classifier {
+  float smoothed[kClassCount] = {};
+  uint8_t chiming[kClassCount] = {};
+  uint32_t lastTriggerMs = 0u;
+  uint8_t blocksSinceInference = 0u;
+  uint8_t predicted = kNoPrediction;
+  // Wraps, and only ever increments, so the desktop tool can tell a fresh
+  // detection from the same keyword still being displayed.
+  uint8_t detections = 0u;
+  uint16_t inferMs = 0u;
 };
 
 /**
@@ -175,6 +213,22 @@ uint8_t g_new_features[kMfccFramesPerBlock * kSpectrogramCoefficients];
 uint8_t g_new_frame_count = 0u;
 SpeechState g_speech_state = SpeechState::Idle;
 uint32_t g_speech_started_ms = 0u;
+// The model input, unrolled oldest frame first the way spark builds it.
+uint8_t g_model_input[kSpectrogramFrames * kSpectrogramCoefficients];
+Classifier g_classifier;
+BB15Pinout g_pinout = BB15Pinout::niclaVoiceDefaults();
+BB15Config g_config = []() {
+  BB15Config config = BB15Config::defaults();
+  config.spiClockHz = kAkidaSpiClockHz;
+  return config;
+}();
+BB15* g_bb15 = nullptr;
+BB15Runner* g_runner = nullptr;
+BB15Model g_model(program, static_cast<size_t>(program_len));
+// Per-neuron dequantization, read out of the program itself rather than
+// hard-coded, so a re-exported model cannot leave stale constants behind.
+const int32_t* g_output_shifts = nullptr;
+const float* g_output_scales = nullptr;
 DcBlockState g_dc_block;
 size_t g_block_fill = 0u;
 int64_t g_block_energy = 0;
@@ -274,7 +328,7 @@ void send_audio_config_packet() {
   write_u16(kWaveformPoints);
   write_u16(kSpectrogramFrames);
   Serial.write(kSpectrogramCoefficients);
-  Serial.write(kNoScores);
+  Serial.write(kClassCount);
   write_u16(kRmsThreshold);
   write_u16(kSpeechActiveTimeMs);
   write_u16(kSmoothingAlphaQ15);
@@ -306,9 +360,11 @@ void send_audio_result_packet(const AudioBlock& block) {
       static_cast<uint32_t>(sizeof(int16_t)) * 2u * kWaveformPoints;
   const uint32_t feature_bytes =
       static_cast<uint32_t>(g_new_frame_count) * kSpectrogramCoefficients;
+  const uint32_t score_bytes =
+      static_cast<uint32_t>(sizeof(int16_t)) * kClassCount;
   write_packet_header(PacketType::AudioResult,
                       static_cast<uint32_t>(kAudioResultMetadataBytes) +
-                          waveform_bytes + feature_bytes);
+                          waveform_bytes + feature_bytes + score_bytes);
   write_u32(block.sequence);
   write_u32(block.deviceMs);
   write_u16(block.rms);
@@ -316,21 +372,26 @@ void send_audio_result_packet(const AudioBlock& block) {
   write_u16(g_dropped_chunks);
   write_u16(block.captureMs);
   write_u16(block.featureMs);
-  write_u16(kNoTimingMs);
+  write_u16(g_classifier.inferMs);
   Serial.write(static_cast<uint8_t>(block.speechActive ? 1u : 0u));
   Serial.write(kStatusOk);
-  Serial.write(kNoPrediction);
-  Serial.write(kNoScores);
+  Serial.write(g_classifier.predicted);
+  Serial.write(kClassCount);
   Serial.write(static_cast<uint8_t>(kWaveformPoints));
   Serial.write(g_new_frame_count);
-  Serial.write(kNoChiming);
-  Serial.write(kReservedByte);
+  Serial.write(g_classifier.predicted == kNoPrediction
+                   ? 0u
+                   : g_classifier.chiming[g_classifier.predicted]);
+  Serial.write(g_classifier.detections);
   for (uint16_t point = 0u; point < 2u * kWaveformPoints; ++point) {
     write_i16(g_waveform[point]);
   }
   Serial.write(g_new_features,
                static_cast<size_t>(g_new_frame_count) *
                    kSpectrogramCoefficients);
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    write_i16(static_cast<int16_t>(g_classifier.smoothed[index] * 32767.0f));
+  }
   Serial.flush();
 }
 
@@ -481,6 +542,161 @@ uint16_t extract_features() {
 }
 
 /**
+ * @brief Turn the raw Akida potentials into the dequantized values spark
+ *        softmaxes.
+ *
+ * The engine's own formula, from HardwareDeviceImpl::dequantize(): each
+ * neuron's potential has its shift subtracted and is divided by its scale.
+ * spark reaches the same numbers through akida_predict(), which dequantizes
+ * before returning; this library hands back the potentials instead.
+ *
+ * @param potentials  kClassCount raw potentials from the runner.
+ * @param out         Receives the dequantized values.
+ */
+void dequantize_potentials(const int32_t* potentials, float* out) {
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    out[index] = static_cast<float>(potentials[index] - g_output_shifts[index]) /
+                 g_output_scales[index];
+  }
+}
+
+/**
+ * @brief Numerically stable softmax in place, spark's softmax() from
+ *        source/core/common/inference/infer_utils.c.
+ *
+ * @param values  kClassCount values, replaced by the normalized result.
+ */
+void softmax_in_place(float* values) {
+  float highest = values[0];
+  for (uint8_t index = 1u; index < kClassCount; ++index) {
+    if (values[index] > highest) {
+      highest = values[index];
+    }
+  }
+  float total = 0.0f;
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    values[index] = expf(values[index] - highest);
+    total += values[index];
+  }
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    values[index] /= total;
+  }
+}
+
+/**
+ * @brief Say whether spark's post-detection cooldown has expired.
+ *
+ * From is_kws_debounce_complete() in spark's main.cpp. While it has not, spark
+ * skips the whole front end, which is why this gates the block before the RMS
+ * is even looked at.
+ *
+ * @return True when audio may be processed again.
+ */
+bool debounce_complete() {
+  return g_classifier.lastTriggerMs == 0u ||
+         (millis() - g_classifier.lastTriggerMs) > kDebounceMs;
+}
+
+/**
+ * @brief Clear the scores, counters and part-built model input.
+ *
+ * spark's reset_stale_inference_data(), called both when an utterance times
+ * out and immediately after a detection.
+ */
+void reset_inference_state() {
+  memset(g_classifier.smoothed, 0, sizeof(g_classifier.smoothed));
+  memset(g_classifier.chiming, 0, sizeof(g_classifier.chiming));
+  clear_spectrogram();
+}
+
+/**
+ * @brief Copy the model input out of the ring, oldest frame first.
+ *
+ * spark unrolls its circular spectrogram as idx = (i + spectrogram_index) % 49
+ * when it builds the tensor, and the write position is the oldest frame.
+ */
+void build_model_input() {
+  for (uint16_t frame = 0u; frame < kSpectrogramFrames; ++frame) {
+    const uint16_t source =
+        static_cast<uint16_t>((frame + g_spectrogram_index) % kSpectrogramFrames);
+    memcpy(&g_model_input[frame * kSpectrogramCoefficients],
+           &g_spectrogram[source * kSpectrogramCoefficients],
+           kSpectrogramCoefficients);
+  }
+}
+
+/**
+ * @brief Apply spark's decision logic to one set of smoothed scores.
+ *
+ * kws_post_processing() in spark's main.cpp: a class at or above the score
+ * threshold advances its chiming counter and anything below resets it, silence
+ * and unknown can never trigger, and the highest scoring class to reach the
+ * chiming threshold fires. A detection starts the debounce cooldown and throws
+ * the accumulated state away.
+ */
+void apply_decision() {
+  uint8_t triggered = kNoPrediction;
+  float best = 0.0f;
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    if (index == kSilenceClass || index == kUnknownClass) {
+      continue;
+    }
+    if (g_classifier.smoothed[index] >= kScoreThreshold) {
+      ++g_classifier.chiming[index];
+    } else {
+      g_classifier.chiming[index] = 0u;
+    }
+    if (g_classifier.chiming[index] >= kChimingThreshold &&
+        (triggered == kNoPrediction || g_classifier.smoothed[index] > best)) {
+      triggered = index;
+      best = g_classifier.smoothed[index];
+    }
+  }
+  if (triggered == kNoPrediction) {
+    return;
+  }
+  g_classifier.predicted = triggered;
+  ++g_classifier.detections;
+  g_classifier.lastTriggerMs = millis();
+  Serial.print(kLogPrefix);
+  Serial.print(" keyword=");
+  Serial.println(kClassLabels[triggered]);
+  reset_inference_state();
+}
+
+/**
+ * @brief Run one inference on the current model input and fold in the result.
+ *
+ * @return True when the runner produced usable scores.
+ */
+bool run_inference() {
+  build_model_input();
+  BB15Input input;
+  input.data = g_model_input;
+  input.type = akida::TensorType::uint8;
+  input.dimensions = {1u, kSpectrogramFrames, kSpectrogramCoefficients, 1u};
+
+  const uint32_t started_ms = millis();
+  const BB15RunResult result = g_runner->infer(input);
+  g_classifier.inferMs = clamp_u16(millis() - started_ms);
+  if (!result.ok() || result.type != akida::TensorType::int32 ||
+      result.elementCount() < kClassCount) {
+    return false;
+  }
+
+  float scores[kClassCount];
+  dequantize_potentials(result.data<int32_t>(), scores);
+  softmax_in_place(scores);
+  for (uint8_t index = 0u; index < kClassCount; ++index) {
+    g_classifier.smoothed[index] =
+        kSmoothingAlpha * scores[index] +
+        (1.0f - kSmoothingAlpha) * g_classifier.smoothed[index];
+  }
+  apply_decision();
+  return true;
+}
+
+/**
  * @brief Decide whether this block's audio should reach the MFCC front end.
  *
  * spark's rule, from audio_process_thread() in
@@ -494,6 +710,12 @@ uint16_t extract_features() {
  * @return True when the block should be turned into features.
  */
 bool gate_block(uint16_t rms) {
+  if (!debounce_complete()) {
+    // spark skips the whole front end during the cooldown, so a detection is
+    // not immediately re-triggered by the tail of the same word.
+    g_speech_state = SpeechState::Idle;
+    return false;
+  }
   if (rms >= kRmsThreshold) {
     g_speech_state = SpeechState::Active;
     g_speech_started_ms = millis();
@@ -504,7 +726,7 @@ bool gate_block(uint16_t rms) {
   }
   if (millis() - g_speech_started_ms > kSpeechActiveTimeMs) {
     g_speech_state = SpeechState::Idle;
-    clear_spectrogram();
+    reset_inference_state();
     return false;
   }
   return true;
@@ -525,6 +747,10 @@ void publish_filled_block() {
   g_new_frame_count = 0u;
   if (gate_block(block.rms)) {
     block.featureMs = extract_features();
+    if (++g_classifier.blocksSinceInference >= kInferencePeriodBlocks) {
+      g_classifier.blocksSinceInference = 0u;
+      run_inference();
+    }
   }
   block.speechActive = g_speech_state == SpeechState::Active;
   // The overlap advances whether or not the block became features, or the next
@@ -631,6 +857,7 @@ bool capture_fresh_chunk() {
  */
 void reset_capture_state() {
   g_dc_block = DcBlockState();
+  g_classifier = Classifier();
   g_speech_state = SpeechState::Idle;
   g_speech_started_ms = 0u;
   g_new_frame_count = 0u;
@@ -644,6 +871,40 @@ void reset_capture_state() {
   g_dropped_chunks = 0u;
   g_sequence = 0u;
   g_next_chunk_poll_ms = millis();
+}
+
+/**
+ * @brief Bring BB15 up, load the keyword model and read its dequantization.
+ *
+ * The model is kept in host memory rather than BB15 external flash: it is
+ * 22 KB against 400 KB of free program space, so it costs flash this sketch
+ * has and saves a flashing step, a companion sketch and a failure mode. The
+ * Nicla Vision demo makes the opposite choice because its model is 184 KB.
+ *
+ * @return True when the runtime is ready to infer.
+ */
+bool prepare_akida() {
+  static BB15 bb15(g_pinout, g_config);
+  static BB15Runner runner = bb15.createRunner();
+  g_bb15 = &bb15;
+  g_runner = &runner;
+
+  if (bb15.begin() != BB15Status::Ok || runner.begin() != BB15Status::Ok) {
+    return false;
+  }
+  g_model.setStorage(BB15ModelStorage::HostMemory);
+  if (runner.loadModel(g_model) != BB15Status::Ok) {
+    return false;
+  }
+
+  const akida::ProgramInfo info(program, static_cast<size_t>(program_len));
+  if (!info.is_valid() || info.shifts().size < kClassCount ||
+      info.scales().size < kClassCount) {
+    return false;
+  }
+  g_output_shifts = info.shifts().data;
+  g_output_scales = info.scales().data;
+  return true;
 }
 
 /**
@@ -693,6 +954,20 @@ void setup() {
     return;
   }
   clear_spectrogram();
+  if (!prepare_akida()) {
+    fail_setup("akida", kStatusAkidaFailed);
+    Serial.print(kLogPrefix);
+    Serial.print(" detail=");
+    g_bb15->printLastError(Serial);
+    return;
+  }
+  Serial.print(kLogPrefix);
+  Serial.print(" akida_ready ip_version=0x");
+  Serial.print(g_bb15->ipVersion(), HEX);
+  Serial.print(" model=");
+  Serial.print(akida_model_path);
+  Serial.print(" bytes=");
+  Serial.println(static_cast<long>(akida_program_length_bytes));
   if (!prepare_microphone()) {
     fail_setup("microphone", kStatusMicrophoneFailed);
     return;

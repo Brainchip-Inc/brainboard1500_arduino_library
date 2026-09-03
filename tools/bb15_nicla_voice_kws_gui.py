@@ -40,7 +40,30 @@ MESSAGE_AUDIO_RESULT = 0x85
 DEVICE_ERRORS = {
     0x81: "the MFCC front end could not start",
     0x82: "the NDP120 microphone did not start, try a power cycle",
+    0x83: "BB15 did not come up, check the board is seated",
 }
+
+# From spark's kws_new_tags[], matching the silence and unknown class indices
+# in the model's info.yaml. Neither of those two can trigger a detection.
+CLASS_LABELS = (
+    "down", "go", "left", "no", "off", "on",
+    "right", "stop", "up", "yes", "silence", "unknown",
+)
+SILENCE_CLASS = 10
+UNKNOWN_CLASS = 11
+# The device computes and transmits all twelve class scores, and the headless
+# decoder still reads them, which is what makes "unknown dominates" a usable
+# diagnostic. Silence and unknown are hidden here at the display only: neither
+# can ever trigger a detection, so nothing this card reports depends on them.
+DISPLAY_CLASSES = tuple(
+    index
+    for index in range(len(CLASS_LABELS))
+    if index not in (SILENCE_CLASS, UNKNOWN_CLASS)
+)
+NO_PREDICTION = 0xFF
+SCORE_FULL_SCALE = 32767.0
+# How long a detection stays highlighted before the card goes back to waiting.
+DETECTION_HOLD_S = 2.5
 ERROR_PAYLOAD_BYTES = 1
 MAX_WAVEFORM_POINTS = 255
 MAX_MFCC_FRAMES = 255
@@ -96,12 +119,12 @@ METER_FLOOR_DBFS = -60.0
 # stable width also stops the row shuffling as numbers grow and shrink.
 WIDTH_RESULT_TITLE = 18
 WIDTH_PREDICTION = 26
-WIDTH_SCORES = 22
+WIDTH_SCORES = 16
 WIDTH_VIEW_CAPTION = 52
 WIDTH_SCALE_CAPTION = 20
 WIDTH_LEVEL = 26
 WIDTH_BADGE = 8
-WIDTH_STATUS = 104
+WIDTH_STATUS = 124
 WIDTH_CONNECTION = 14
 
 COLOR_PAGE = "#e9edf0"
@@ -128,6 +151,10 @@ COLOR_BADGE_IDLE_BG = "#1e2c33"
 COLOR_BADGE_IDLE_FG = "#7f97a3"
 COLOR_BADGE_SPEECH_BG = "#1d7a5f"
 COLOR_BADGE_SPEECH_FG = "#eafaf4"
+COLOR_SCORE_BAR_KEYWORD = "#2f7d8a"
+COLOR_SCORE_BAR_TRIGGERED = "#1d8568"
+COLOR_SCORE_TRACK = "#e3e9ec"
+COLOR_SCORE_THRESHOLD = "#93a6af"
 # Real feature bytes occupy a narrow slice of the model's 0 to 255 input scale,
 # and coefficient 0 carries the frame energy so its slice is far wider than the
 # rest: measured over speech it spans about 76 of the 256 steps while the other
@@ -193,8 +220,10 @@ class AudioResult:
     waveform_points: int
     mfcc_frames: int
     chiming_count: int
+    detections: int
     envelope: Tuple[int, ...]
     features: bytes
+    scores: Tuple[float, ...]
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,7 +292,7 @@ def plausible_header(message_type: int, payload_size: int) -> bool:
         return payload_size == AUDIO_CONFIG.size
     if message_type == MESSAGE_AUDIO_RESULT:
         trailer = payload_size - AUDIO_RESULT.size
-        return 0 < trailer <= 4 * MAX_WAVEFORM_POINTS + 10 * MAX_MFCC_FRAMES
+        return 0 < trailer <= 4 * MAX_WAVEFORM_POINTS + 10 * MAX_MFCC_FRAMES + 2 * 255
     return False
 
 
@@ -303,16 +332,24 @@ def parse_audio_result(payload: bytes) -> AudioResult:
         raise ValueError("truncated audio-result payload")
     metadata = AUDIO_RESULT.unpack(payload[: AUDIO_RESULT.size])
     trailer = payload[AUDIO_RESULT.size :]
-    waveform_points, mfcc_frames = metadata[12], metadata[13]
+    score_count, waveform_points, mfcc_frames = metadata[11], metadata[12], metadata[13]
     envelope_bytes = 4 * waveform_points
-    expected = envelope_bytes + 10 * mfcc_frames
+    feature_bytes = 10 * mfcc_frames
+    expected = envelope_bytes + feature_bytes + 2 * score_count
     if len(trailer) != expected:
         raise ValueError(
             f"invalid result trailer: {len(trailer)} bytes, expected {expected}"
         )
     envelope = struct.unpack(f"<{2 * waveform_points}h", trailer[:envelope_bytes])
+    raw_scores = struct.unpack(
+        f"<{score_count}h", trailer[envelope_bytes + feature_bytes :]
+    )
     return AudioResult(
-        *metadata[:15], envelope=envelope, features=trailer[envelope_bytes:]
+        *metadata[:15],
+        detections=metadata[15],
+        envelope=envelope,
+        features=trailer[envelope_bytes : envelope_bytes + feature_bytes],
+        scores=tuple(value / SCORE_FULL_SCALE for value in raw_scores),
     )
 
 
@@ -397,6 +434,10 @@ class KeywordSpottingWindow:
             [None] * SPECTROGRAM_COLUMNS, maxlen=SPECTROGRAM_COLUMNS
         )
         self._spectrogram_image: Optional[tk.PhotoImage] = None
+        self._scores_shown: Tuple[float, ...] = ()
+        self._triggered_class = -1
+        self._last_detections = -1
+        self._detected_at = 0.0
         self._scale = SCALE_FLOOR
         self._level_dbfs = METER_FLOOR_DBFS
         self._live = True
@@ -482,6 +523,33 @@ class KeywordSpottingWindow:
         )
         self._score_label.grid(row=1, column=1, sticky="e", pady=(2, 0))
 
+        self._scores = tk.Canvas(
+            card, bg=COLOR_CARD, highlightthickness=0, bd=0, height=62
+        )
+        self._scores.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self._scores.bind("<Configure>", self._on_scores_resize)
+        self._score_threshold_line = self._scores.create_line(
+            0, 0, 0, 0, fill=COLOR_SCORE_THRESHOLD
+        )
+        self._score_tracks = []
+        self._score_bars = []
+        self._score_names = []
+        for class_index in DISPLAY_CLASSES:
+            self._score_tracks.append(
+                self._scores.create_rectangle(0, 0, 0, 0, fill=COLOR_SCORE_TRACK, width=0)
+            )
+            self._score_bars.append(
+                self._scores.create_rectangle(
+                    0, 0, 0, 0, fill=COLOR_SCORE_BAR_KEYWORD, width=0
+                )
+            )
+            self._score_names.append(
+                self._scores.create_text(
+                    0, 0, text=CLASS_LABELS[class_index], fill=COLOR_MUTED,
+                    anchor="n", font=("TkDefaultFont", 8),
+                )
+            )
+
     def _build_live_view(self, parent: tk.Frame) -> None:
         """Create the scrolling waveform and the signal level meter."""
         card = tk.Frame(parent, bg=COLOR_LIVE, padx=16, pady=12)
@@ -516,7 +584,7 @@ class KeywordSpottingWindow:
             bg=COLOR_LIVE,
             highlightthickness=0,
             bd=0,
-            height=180,
+            height=120,
         )
         self._canvas.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(8, 12))
         self._canvas.bind("<Configure>", self._on_canvas_resize)
@@ -610,6 +678,49 @@ class KeywordSpottingWindow:
         )
         self._connection_label.grid(row=0, column=1, sticky="e")
 
+    def _on_scores_resize(self, event: tk.Event) -> None:
+        """Lay the twelve class bars across the width available."""
+        width = max(event.width, 1)
+        self._score_bar_height = max(event.height - 16, 1)
+        slot = width / len(DISPLAY_CLASSES)
+        bar_width = max(slot - 8.0, 2.0)
+        for index in range(len(DISPLAY_CLASSES)):
+            left = index * slot + (slot - bar_width) / 2.0
+            self._scores.coords(
+                self._score_tracks[index], left, 0, left + bar_width,
+                self._score_bar_height,
+            )
+            self._scores.coords(
+                self._score_names[index], left + bar_width / 2.0,
+                self._score_bar_height + 3,
+            )
+        threshold_y = self._score_bar_height * (1.0 - 0.5)
+        self._scores.coords(self._score_threshold_line, 0, threshold_y, width, threshold_y)
+        self._redraw_scores()
+
+    def _redraw_scores(self) -> None:
+        """Repaint the class bars from the last scores received."""
+        height = getattr(self, "_score_bar_height", 1)
+        for slot, class_index in enumerate(DISPLAY_CLASSES):
+            score = (
+                self._scores_shown[class_index]
+                if class_index < len(self._scores_shown)
+                else 0.0
+            )
+            box = self._scores.coords(self._score_tracks[slot])
+            if len(box) != 4:
+                continue
+            left, _, right, bottom = box
+            top = bottom - height * max(0.0, min(1.0, score))
+            self._scores.coords(self._score_bars[slot], left, top, right, bottom)
+            fill = (
+                COLOR_SCORE_BAR_TRIGGERED
+                if class_index == self._triggered_class
+                else COLOR_SCORE_BAR_KEYWORD
+            )
+            if self._scores.itemcget(self._score_bars[slot], "fill") != fill:
+                self._scores.itemconfigure(self._score_bars[slot], fill=fill)
+
     def _on_canvas_resize(self, event: tk.Event) -> None:
         """Remember the waveform canvas size and lay out its static items."""
         self._canvas_width = max(event.width, 1)
@@ -682,6 +793,37 @@ class KeywordSpottingWindow:
         self._result_title.configure(text="NO AUDIO", fg=COLOR_WARN)
         self._connection_label.configure(text="WAITING", fg=COLOR_WARN)
 
+    def _show_prediction(self, result: AudioResult) -> None:
+        """Render the debounced prediction and the twelve class scores."""
+        self._scores_shown = result.scores
+        if result.detections != self._last_detections:
+            self._last_detections = result.detections
+            if result.predicted_index != NO_PREDICTION:
+                self._detected_at = time.monotonic()
+        fresh = time.monotonic() - self._detected_at < DETECTION_HOLD_S
+        detected = result.predicted_index != NO_PREDICTION and fresh
+        self._triggered_class = result.predicted_index if detected else -1
+        self._redraw_scores()
+
+        if not result.scores:
+            return
+        top = max(DISPLAY_CLASSES, key=lambda index: result.scores[index])
+        if result.scores[top] <= 0.0:
+            # Nothing has been classified yet, so naming a class would be a lie.
+            set_text(self._score_label, f"{'--':>8s}  ----")
+        else:
+            set_text(
+                self._score_label,
+                f"{CLASS_LABELS[top]:>8s} {result.scores[top]:5.2f}",
+            )
+        if detected:
+            self._result_title.configure(text="KEYWORD DETECTED", fg=COLOR_OK)
+            self._prediction_label.configure(
+                text=CLASS_LABELS[result.predicted_index], fg=COLOR_OK
+            )
+        else:
+            self._prediction_label.configure(text="Say a keyword", fg=COLOR_MUTED)
+
     def _mark_live(self) -> None:
         """Restore the live look after blocks start arriving again."""
         if self._live:
@@ -690,7 +832,6 @@ class KeywordSpottingWindow:
         self._canvas.itemconfigure(
             self._wave, fill=COLOR_WAVE_FILL, outline=COLOR_WAVE_EDGE
         )
-        self._result_title.configure(text="LISTENING", fg=COLOR_MUTED)
         self._connection_label.configure(text="STREAMING", fg=COLOR_OK)
 
     def set_streaming(self, config: AudioConfig) -> None:
@@ -698,6 +839,10 @@ class KeywordSpottingWindow:
         self._config = config
         self._clear_live_view()
         self._mark_live()
+        self._scores_shown = ()
+        self._triggered_class = -1
+        self._last_detections = -1
+        self._redraw_scores()
         set_text(
             self._view_caption,
             f"MICROPHONE WAVEFORM   {self._window_seconds():.1f} s window   "
@@ -706,6 +851,8 @@ class KeywordSpottingWindow:
         if config.class_count == 0:
             self._prediction_label.configure(text="Awaiting model", fg=COLOR_MUTED)
             self._score_label.configure(text="12 classes pending")
+        else:
+            self._prediction_label.configure(text="Say a keyword", fg=COLOR_MUTED)
         self._redraw_meter()
 
     def _append_features(self, result: AudioResult) -> None:
@@ -826,6 +973,12 @@ class KeywordSpottingWindow:
         """Render one audio block: waveform, level meter and telemetry."""
         assert self._config is not None
         self._mark_live()
+        self._show_prediction(result)
+        if self._triggered_class < 0:
+            self._result_title.configure(
+                text="SPEECH" if result.speech_active else "LISTENING",
+                fg=COLOR_OK if result.speech_active else COLOR_MUTED,
+            )
         self._columns.extend(aggregate_columns(result.envelope, COLUMNS_PER_BLOCK))
         self._append_features(result)
         self._update_scale()
@@ -842,7 +995,8 @@ class KeywordSpottingWindow:
         status = (
             f"block {result.sequence:<8d}peak {result.peak:5d}   "
             f"dropped {result.dropped_chunks:<5d}capture {result.capture_ms:3d} ms   "
-            f"features {result.feature_ms:3d} ms   {block_rate:4.1f} blk/s"
+            f"features {result.feature_ms:3d} ms   "
+            f"inference {result.infer_ms:3d} ms   {block_rate:4.1f} blk/s"
         )
         if result.status != 0:
             status += f"   BB15 status={result.status}"
