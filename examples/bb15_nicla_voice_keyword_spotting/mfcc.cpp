@@ -1,3 +1,8 @@
+/*
+ * Derived from Arm's MFCC feature extraction in ML-KWS-for-MCU, Apache-2.0.
+ * See `mfcc.h` for the attribution this license requires.
+ */
+
 #include "mfcc.h"
 
 #include <math.h>

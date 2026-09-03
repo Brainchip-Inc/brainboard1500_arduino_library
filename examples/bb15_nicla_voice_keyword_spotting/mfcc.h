@@ -1,11 +1,21 @@
 /*
  * MFCC front end for the BB15 Nicla Voice keyword spotting demo.
  *
- * The arithmetic is spark's `mfcc_compute()` from
- * `source/core/common/audio/mfcc.c`, which is in turn Arm's MFCC from
- * ML-KWS-for-MCU (Apache-2.0). It is kept value for value, because the
- * keyword model was trained against exactly these features and a front end
- * that is subtly different fails the model in a way that is hard to diagnose.
+ * The arithmetic here is derived from Arm's MFCC feature extraction in
+ * ML-KWS-for-MCU, by way of BrainChip's own port of it:
+ *
+ *     Copyright (C) 2018 Arm Limited or its affiliates. All rights reserved.
+ *     SPDX-License-Identifier: Apache-2.0
+ *
+ *     Licensed under the Apache License, Version 2.0 (the License); you may
+ *     not use this file except in compliance with the License. You may obtain
+ *     a copy of the License at www.apache.org/licenses/LICENSE-2.0
+ *
+ * A copy of that license text is in `LICENSE-APACHE-2.0` at the repository
+ * root. This file and `mfcc.cpp` are new code rather than copies, but they
+ * reproduce that arithmetic value for value, because the keyword model was
+ * trained against exactly these features and a front end that is subtly
+ * different fails the model in a way that is hard to diagnose.
  *
  * What differs from spark is storage, not maths. Every buffer here is a
  * fixed-size static sized for this demo's single configuration, because the
