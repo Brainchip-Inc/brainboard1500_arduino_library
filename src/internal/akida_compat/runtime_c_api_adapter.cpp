@@ -74,8 +74,8 @@ int RuntimeCAPIAdapter::program_flash(uint8_t* program_info_buffer, size_t len,
   } else {
     program_data_address = normalize_external_model_address(flash_address);
   }
-  program_info_ = device_.program_external_data(
-      program_info_buffer, len, program_data_address);
+  program_info_ = device_.program_external_data(program_info_buffer, len,
+                                                program_data_address);
   if (!program_info_.is_valid()) {
     if (is_el_model != nullptr) {
       *is_el_model = 0u;
@@ -111,10 +111,9 @@ int RuntimeCAPIAdapter::forward(uint8_t* input, const uint32_t* input_dims,
     return failure();
   }
 
-  TensorConstPtr in = Dense::create_view(reinterpret_cast<const char*>(input),
-                                         TensorType::uint8,
-                                         hwc_shape(input_dims),
-                                         Dense::Layout::RowMajor);
+  TensorConstPtr in = Dense::create_view(
+      reinterpret_cast<const char*>(input), TensorType::uint8,
+      hwc_shape(input_dims), Dense::Layout::RowMajor);
   auto ret = device_.forward({in});
   if (ret.empty()) {
     return failure();
@@ -137,10 +136,9 @@ int RuntimeCAPIAdapter::predict(uint8_t* input, const uint32_t* input_dims,
     return failure();
   }
 
-  TensorConstPtr in = Dense::create_view(reinterpret_cast<const char*>(input),
-                                         TensorType::uint8,
-                                         hwc_shape(input_dims),
-                                         Dense::Layout::RowMajor);
+  TensorConstPtr in = Dense::create_view(
+      reinterpret_cast<const char*>(input), TensorType::uint8,
+      hwc_shape(input_dims), Dense::Layout::RowMajor);
   auto ret = device_.predict({in});
   if (ret.empty()) {
     return failure();
@@ -148,8 +146,7 @@ int RuntimeCAPIAdapter::predict(uint8_t* input, const uint32_t* input_dims,
 
   auto out = Tensor::ensure_dense(std::move(ret.front()));
   if (out == nullptr ||
-      out->size() * sizeof(float) !=
-          static_cast<size_t>(output_size_bytes)) {
+      out->size() * sizeof(float) != static_cast<size_t>(output_size_bytes)) {
     return failure();
   }
 
@@ -164,10 +161,9 @@ void RuntimeCAPIAdapter::fit(uint8_t* input, const uint32_t* input_dims,
     return;
   }
 
-  auto input_tensor = Dense::create_view(reinterpret_cast<const char*>(input),
-                                         TensorType::uint8,
-                                         bhwc_shape(input_dims),
-                                         Dense::Layout::RowMajor);
+  auto input_tensor = Dense::create_view(
+      reinterpret_cast<const char*>(input), TensorType::uint8,
+      bhwc_shape(input_dims), Dense::Layout::RowMajor);
   auto input_vector = Dense::split(*input_tensor);
   std::vector<int32_t> labels = {*input_label};
   (void)device_.fit(input_vector, labels);
@@ -179,10 +175,9 @@ int RuntimeCAPIAdapter::enqueue(uint8_t* input, const uint32_t* input_dims,
     return failure();
   }
 
-  auto input_tensor = Dense::create_view(reinterpret_cast<const char*>(input),
-                                         TensorType::uint8,
-                                         hwc_shape(input_dims),
-                                         Dense::Layout::RowMajor);
+  auto input_tensor = Dense::create_view(
+      reinterpret_cast<const char*>(input), TensorType::uint8,
+      hwc_shape(input_dims), Dense::Layout::RowMajor);
   const bool queued = (input_label != nullptr)
                           ? device_.enqueue(*input_tensor, input_label)
                           : device_.enqueue(*input_tensor);

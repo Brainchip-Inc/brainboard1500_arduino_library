@@ -97,6 +97,15 @@ jobs:
 
       - name: C and C++
         if: contains(env.LINT_LANGUAGES, 'c') || contains(env.LINT_LANGUAGES, 'cpp')
+        env:
+          # Pinned on purpose. Different clang-format majors format differently,
+          # so an unpinned version turns the next GitHub runner image bump into a
+          # mystery failure on code nobody touched. This matches the version
+          # Brainchip-Inc/spark pins, so the two repositories agree; the finding
+          # set on this repository was verified identical across clang-format 14
+          # through 22, so matching spark costs nothing here. Bump this when
+          # spark moves, after re-checking the tree against the new version.
+          CLANG_FORMAT_VERSION: "22.1.1"
         run: |
           set -euo pipefail
           # .ino is an Arduino sketch, which is the C++ this library mostly
@@ -107,6 +116,8 @@ jobs:
             echo "::error::.clang-format is missing, so there is no agreed style to check against"
             exit 1
           fi
+          python3 -m pip install --quiet "clang-format==${CLANG_FORMAT_VERSION}"
+          clang-format --version
           xargs -a files.txt clang-format --dry-run --Werror
 
       - name: JavaScript, TypeScript, HTML and CSS
