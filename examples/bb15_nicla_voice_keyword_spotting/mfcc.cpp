@@ -67,9 +67,9 @@ float mel_scale(float frequency) {
  */
 void build_window() {
   for (int i = 0; i < kMfccFrameSamples; ++i) {
-    g_window[i] = 0.5f - 0.5f * cosf(static_cast<float>(kTwoPi) *
-                                     static_cast<float>(i) /
-                                     static_cast<float>(kMfccFrameSamples));
+    g_window[i] =
+        0.5f - 0.5f * cosf(static_cast<float>(kTwoPi) * static_cast<float>(i) /
+                           static_cast<float>(kMfccFrameSamples));
   }
 }
 
@@ -105,8 +105,7 @@ bool build_filter_bank() {
   const float fft_bin_width = kSampleRateHz / kMfccFrameSamples;
   const float mel_low = mel_scale(kMelLowFreqHz);
   const float mel_high = mel_scale(kMelHighFreqHz);
-  const float mel_delta =
-      (mel_high - mel_low) / (kMfccFilterBankBins + 1);
+  const float mel_delta = (mel_high - mel_low) / (kMfccFilterBankBins + 1);
 
   int written = 0;
   for (int bin = 0; bin < kMfccFilterBankBins; ++bin) {
@@ -164,8 +163,8 @@ void mfcc_compute(const int16_t* audio, float* out) {
 
   kiss_fftr(g_fft_config, g_frame, g_spectrum);
   for (int i = 0; i < kPowerBins; ++i) {
-    g_power[i] = g_spectrum[i].r * g_spectrum[i].r +
-                 g_spectrum[i].i * g_spectrum[i].i;
+    g_power[i] =
+        g_spectrum[i].r * g_spectrum[i].r + g_spectrum[i].i * g_spectrum[i].i;
   }
 
   for (int bin = 0; bin < kMfccFilterBankBins; ++bin) {

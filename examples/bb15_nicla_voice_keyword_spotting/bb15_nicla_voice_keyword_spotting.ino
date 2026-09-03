@@ -1,8 +1,6 @@
 #include <Arduino.h>
-
-#include <NDP.h>
-
 #include <BB15.h>
+#include <NDP.h>
 
 #include "akida/program_info.h"
 #include "mfcc.h"
@@ -39,7 +37,8 @@ constexpr uint32_t kIdleReportMs = 2000u;
 // configuration that starts the tank; this demo uses none of its classes.
 constexpr const char* kNdpMcuFirmware = "mcu_fw_120_v90.synpkg";
 constexpr const char* kNdpDspFirmware = "dsp_firmware_v90.synpkg";
-constexpr const char* kNdpAudioFlowPackage = "alexa_334_NDP120_B0_v11_v90.synpkg";
+constexpr const char* kNdpAudioFlowPackage =
+    "alexa_334_NDP120_B0_v11_v90.synpkg";
 
 // The NDP120 publishes one 24 ms chunk of 16 kHz mono PCM at a time and holds
 // it until the next one replaces it, so polling must be paced: too slow loses
@@ -150,13 +149,14 @@ constexpr uint8_t kReservedByte = 0u;
 // source/apps/demo_apps/sample_input/kws/kws_inputs.cpp, which agrees with the
 // silence and unknown class indices in the model's info.yaml.
 constexpr const char* kClassLabels[kClassCount] = {
-    "down", "go",   "left", "no",  "off",     "on",
-    "right", "stop", "up",  "yes", "silence", "unknown"};
+    "down",  "go",   "left", "no",  "off",     "on",
+    "right", "stop", "up",   "yes", "silence", "unknown"};
 
 constexpr const char* kSketchName = "bb15_nicla_voice_keyword_spotting";
 constexpr const char* kLogPrefix = "[bb15_nicla_voice_keyword_spotting]";
 
-/** @brief One completed 60 ms audio block, ready to stream to the desktop tool. */
+/** @brief One completed 60 ms audio block, ready to stream to the desktop tool.
+ */
 struct AudioBlock {
   uint32_t sequence = 0u;
   uint32_t deviceMs = 0u;
@@ -414,9 +414,8 @@ void send_audio_result_packet(const AudioBlock& block) {
   for (uint16_t point = 0u; point < 2u * kWaveformPoints; ++point) {
     write_i16(g_waveform[point]);
   }
-  Serial.write(g_new_features,
-               static_cast<size_t>(g_new_frame_count) *
-                   kSpectrogramCoefficients);
+  Serial.write(g_new_features, static_cast<size_t>(g_new_frame_count) *
+                                   kSpectrogramCoefficients);
   for (uint8_t index = 0u; index < kClassCount; ++index) {
     write_i16(static_cast<int16_t>(g_classifier.smoothed[index] * 32767.0f));
   }
@@ -553,8 +552,8 @@ uint16_t extract_features() {
 
   for (uint8_t frame = 0u; frame < kMfccFramesPerBlock; ++frame) {
     mfcc_compute(&g_mfcc_input[frame * kMfccHopSamples], coefficients);
-    uint8_t* pushed = &g_spectrogram[g_spectrogram_index *
-                                     kSpectrogramCoefficients];
+    uint8_t* pushed =
+        &g_spectrogram[g_spectrogram_index * kSpectrogramCoefficients];
     for (uint8_t index = 0u; index < kSpectrogramCoefficients; ++index) {
       const uint8_t feature = quantize_feature(coefficients[index]);
       pushed[index] = feature;
@@ -583,8 +582,9 @@ uint16_t extract_features() {
  */
 void dequantize_potentials(const int32_t* potentials, float* out) {
   for (uint8_t index = 0u; index < kClassCount; ++index) {
-    out[index] = static_cast<float>(potentials[index] - g_output_shifts[index]) /
-                 g_output_scales[index];
+    out[index] =
+        static_cast<float>(potentials[index] - g_output_shifts[index]) /
+        g_output_scales[index];
   }
 }
 
@@ -645,8 +645,8 @@ void reset_inference_state() {
  */
 void build_model_input() {
   for (uint16_t frame = 0u; frame < kSpectrogramFrames; ++frame) {
-    const uint16_t source =
-        static_cast<uint16_t>((frame + g_spectrogram_index) % kSpectrogramFrames);
+    const uint16_t source = static_cast<uint16_t>(
+        (frame + g_spectrogram_index) % kSpectrogramFrames);
     memcpy(&g_model_input[frame * kSpectrogramCoefficients],
            &g_spectrogram[source * kSpectrogramCoefficients],
            kSpectrogramCoefficients);
@@ -810,7 +810,8 @@ void accumulate_samples(const int16_t* samples, size_t count) {
       const int16_t sample = samples[consumed + index];
       g_mfcc_input[kMfccHopSamples + g_block_fill + index] = sample;
       g_block_energy += static_cast<int32_t>(sample) * sample;
-      const uint16_t magnitude = static_cast<uint16_t>(sample < 0 ? -sample : sample);
+      const uint16_t magnitude =
+          static_cast<uint16_t>(sample < 0 ? -sample : sample);
       if (magnitude > g_block_peak) {
         g_block_peak = magnitude;
       }
