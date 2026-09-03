@@ -75,8 +75,8 @@ BB15Runner* g_runner = nullptr;
 BB15Model g_model = []() {
   BB15Model model(program, static_cast<size_t>(program_len));
   model.setStorage(BB15ModelStorage::ExternalFlash)
-      .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
-          kFlashModelOffset));
+      .setExternalAddress(
+          AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset));
   return model;
 }();
 

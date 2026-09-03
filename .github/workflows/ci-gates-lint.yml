@@ -99,7 +99,10 @@ jobs:
         if: contains(env.LINT_LANGUAGES, 'c') || contains(env.LINT_LANGUAGES, 'cpp')
         run: |
           set -euo pipefail
-          grep -E '\.(c|h|cc|cpp|cxx|hh|hpp)$' changed.txt > files.txt || { echo "no c or c++ changed"; exit 0; }
+          # .ino is an Arduino sketch, which is the C++ this library mostly
+          # ships. clang-format treats an unknown extension as C++, so the
+          # sketches are checked against the same .clang-format as src/.
+          grep -E '\.(c|h|cc|cpp|cxx|hh|hpp|ino)$' changed.txt > files.txt || { echo "no c or c++ changed"; exit 0; }
           if [ ! -f .clang-format ]; then
             echo "::error::.clang-format is missing, so there is no agreed style to check against"
             exit 1
