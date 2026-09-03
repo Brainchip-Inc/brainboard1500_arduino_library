@@ -1,5 +1,4 @@
 #include <Arduino.h>
-
 #include <BB15.h>
 #include <Nicla_System.h>
 
@@ -67,8 +66,8 @@ BB15Runner* g_runner = nullptr;
 BB15Model g_model = []() {
   BB15Model model(program, static_cast<size_t>(program_len));
   model.setStorage(BB15ModelStorage::ExternalFlash)
-      .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
-          kFlashModelOffset));
+      .setExternalAddress(
+          AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset));
   return model;
 }();
 
@@ -221,8 +220,7 @@ void blink_forever() {
 }
 
 bool validate_export_geometry() {
-  return akida_input_rank == 3 &&
-         akida_input_shape[0] == kModelWidth &&
+  return akida_input_rank == 3 && akida_input_shape[0] == kModelWidth &&
          akida_input_shape[1] == kModelHeight &&
          akida_input_shape[2] == kModelChannels &&
          static_cast<int64_t>(program_len) == akida_program_length_bytes;
@@ -242,10 +240,11 @@ void build_demo_input(uint32_t pass_index) {
       const size_t index = static_cast<size_t>(y) * kModelWidth + x;
       const uint16_t stripe = static_cast<uint16_t>((x / 12u) + (y / 12u));
       const uint8_t base =
-          ((stripe + static_cast<uint16_t>(pass_index)) & 1u) != 0u ? 208u : 32u;
+          ((stripe + static_cast<uint16_t>(pass_index)) & 1u) != 0u ? 208u
+                                                                    : 32u;
       const uint8_t diagonal =
           ((x + y + static_cast<uint16_t>(pass_index * 3u)) % 29u) == 0u ? 255u
-                                                                           : base;
+                                                                         : base;
       g_input[index] = diagonal;
     }
   }

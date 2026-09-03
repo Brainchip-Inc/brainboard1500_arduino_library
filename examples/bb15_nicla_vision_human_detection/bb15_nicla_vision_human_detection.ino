@@ -1,5 +1,4 @@
 #include <Arduino.h>
-
 #include <BB15.h>
 
 #include "camera.h"
@@ -29,7 +28,8 @@ constexpr uint16_t kCameraHeight = 240u;
 constexpr int32_t kCameraFrameRate = 30;
 constexpr size_t kCaptureBytes =
     static_cast<size_t>(kCameraWidth) * kCameraHeight * 2u;
-constexpr size_t kPreviewBytes = static_cast<size_t>(kCameraWidth) * kCameraHeight;
+constexpr size_t kPreviewBytes =
+    static_cast<size_t>(kCameraWidth) * kCameraHeight;
 constexpr uint16_t kModelWidth = 96u;
 constexpr uint16_t kModelHeight = 96u;
 constexpr uint16_t kModelChannels = 3u;
@@ -105,8 +105,8 @@ BB15Runner* g_runner = nullptr;
 BB15Model g_model = []() {
   BB15Model model(program, static_cast<size_t>(program_len));
   model.setStorage(BB15ModelStorage::ExternalFlash)
-      .setExternalAddress(AkidaNicla::externalModelAddressFromOffset(
-          kFlashModelOffset));
+      .setExternalAddress(
+          AkidaNicla::externalModelAddressFromOffset(kFlashModelOffset));
   return model;
 }();
 
@@ -295,8 +295,9 @@ void send_error_packet(BB15Status status) {
 }
 
 void send_frame_result_packet(const Observation& observation) {
-  write_packet_header(PacketType::FrameResult,
-                      static_cast<uint32_t>(kFrameMetadataBytes + kPreviewBytes));
+  write_packet_header(
+      PacketType::FrameResult,
+      static_cast<uint32_t>(kFrameMetadataBytes + kPreviewBytes));
   write_u32(g_sequence++);
   write_u16(kCameraWidth);
   write_u16(kCameraHeight);
@@ -362,8 +363,8 @@ void prepare_crop_maps() {
         kCropOriginX + (static_cast<uint32_t>(x) * kCropSize) / kModelWidth);
   }
   for (uint16_t y = 0u; y < kModelHeight; ++y) {
-    g_crop_y[y] = static_cast<uint16_t>(
-        (static_cast<uint32_t>(y) * kCropSize) / kModelHeight);
+    g_crop_y[y] = static_cast<uint16_t>((static_cast<uint32_t>(y) * kCropSize) /
+                                        kModelHeight);
   }
   g_crop_maps_ready = true;
 }
@@ -375,20 +376,25 @@ void preprocess_rgb565(const uint8_t* frame) {
   for (size_t pixel = 0u; pixel < kPreviewBytes; ++pixel) {
     const uint16_t packed = (static_cast<uint16_t>(frame[pixel * 2u]) << 8) |
                             frame[pixel * 2u + 1u];
-    const uint8_t r8 = static_cast<uint8_t>(((packed >> 11) & 0x1Fu) * 255u / 31u);
-    const uint8_t g8 = static_cast<uint8_t>(((packed >> 5) & 0x3Fu) * 255u / 63u);
+    const uint8_t r8 =
+        static_cast<uint8_t>(((packed >> 11) & 0x1Fu) * 255u / 31u);
+    const uint8_t g8 =
+        static_cast<uint8_t>(((packed >> 5) & 0x3Fu) * 255u / 63u);
     const uint8_t b8 = static_cast<uint8_t>((packed & 0x1Fu) * 255u / 31u);
-    g_preview[pixel] = static_cast<uint8_t>((77u * r8 + 150u * g8 + 29u * b8) >> 8);
+    g_preview[pixel] =
+        static_cast<uint8_t>((77u * r8 + 150u * g8 + 29u * b8) >> 8);
   }
 
   for (uint16_t y = 0u; y < kModelHeight; ++y) {
     for (uint16_t x = 0u; x < kModelWidth; ++x) {
       const size_t source =
           static_cast<size_t>(g_crop_y[y]) * kCameraWidth + g_crop_x[x];
-      const uint16_t packed =
-          (static_cast<uint16_t>(frame[source * 2u]) << 8) | frame[source * 2u + 1u];
-      const uint8_t r8 = static_cast<uint8_t>(((packed >> 11) & 0x1Fu) * 255u / 31u);
-      const uint8_t g8 = static_cast<uint8_t>(((packed >> 5) & 0x3Fu) * 255u / 63u);
+      const uint16_t packed = (static_cast<uint16_t>(frame[source * 2u]) << 8) |
+                              frame[source * 2u + 1u];
+      const uint8_t r8 =
+          static_cast<uint8_t>(((packed >> 11) & 0x1Fu) * 255u / 31u);
+      const uint8_t g8 =
+          static_cast<uint8_t>(((packed >> 5) & 0x3Fu) * 255u / 63u);
       const uint8_t b8 = static_cast<uint8_t>((packed & 0x1Fu) * 255u / 31u);
       // The model was trained with the camera mounted USB-side down.
       const size_t output =
@@ -490,7 +496,8 @@ bool capture_and_infer(Observation* observation) {
 bool prepare_runtime() {
   if (board().begin() != BB15Status::Ok || !board().detectFlash() ||
       runner().begin() != BB15Status::Ok ||
-      runner().loadModel(g_model) != BB15Status::Ok || !configure_interrupt_mode()) {
+      runner().loadModel(g_model) != BB15Status::Ok ||
+      !configure_interrupt_mode()) {
     return false;
   }
   return camera().begin(kCameraResolution, kCameraImageMode, kCameraFrameRate);

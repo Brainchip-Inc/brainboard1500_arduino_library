@@ -1,14 +1,13 @@
 #pragma once
 
+#include <Arduino.h>
+#include <SPI.h>
+#include <Wire.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 #include <vector>
-
-#include <Arduino.h>
-#include <SPI.h>
-#include <Wire.h>
 
 #include "internal/bb15_runtime.h"
 
@@ -172,8 +171,7 @@ struct BB15RunResult {
 
   template <typename T>
   const T* data() const {
-    return bytes.empty() ? nullptr
-                         : reinterpret_cast<const T*>(bytes.data());
+    return bytes.empty() ? nullptr : reinterpret_cast<const T*>(bytes.data());
   }
 };
 
