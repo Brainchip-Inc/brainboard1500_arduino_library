@@ -80,7 +80,8 @@ gh pr create --repo Neuromorphyx/BrainBoard1500_arduino_library \
 
 BrainChip work uses [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description`.
 
-- Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+- Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`,
+  `config`.
 - Include a scope wherever a sensible one exists, for example `examples`, `src`, `license`, `docs`, `tools`.
 - Imperative mood, lower-case description, no trailing period.
 
@@ -94,6 +95,30 @@ docs: clarify example flashing steps
 plain sentences, for example `Correct BB15 reset and sleep pin mapping`. A commit that is intended for a pull
 request back to Neuromorphyx must match that plain-sentence style instead, so the upstream history stays
 consistent. Conventional Commits apply to everything that stays on the BrainChip fork.
+
+## The CI gates
+
+The format above is enforced, not suggested. Two required checks run on every pull request into `main`:
+
+| check | what it rejects |
+| --- | --- |
+| `format` | a pull request title, or any commit subject on the branch, that is not `type(scope): concise message` |
+| `lint` | a linter finding in a file the pull request changed |
+
+`main` takes squash merges only, and GitHub builds the squash subject from the pull request title, so the
+title is the subject that lands in history. The validator is `.github/ci-gates/check-subject.sh` and it runs
+from the base branch, so a pull request cannot relax its own gate.
+
+**The lint gate is deliberately blind to the vendored and generated trees**, which are most of this
+repository by file count: the Akida engine, FlatBuffers, `legacy_akd1500`, kissfft, and the exported
+`program.*` and `model_metadata.*` model assets in the examples. `.github/ci-gates/ci-gates.conf` holds that
+list as `LINT_EXCLUDE_REGEX` and explains the reasoning. When you vendor a new third-party tree or add a new
+generated asset, add it there in the same pull request, otherwise the gate reports drift nobody is allowed
+to fix.
+
+`main` is also protected by two mechanisms that stack, so read both before concluding anything about what
+is enforced: a repository ruleset named `protect-main` requires the pull request and its approving review,
+and classic branch protection requires the two checks and linear history.
 
 ## The `.workspace/` convention
 
