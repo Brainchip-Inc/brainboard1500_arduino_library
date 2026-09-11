@@ -282,12 +282,13 @@ Nicla Vision keyword spotting, as of September 11, 2026:
   frames, and 2 ms per inference
 - resource use: 247,432 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
   of static RAM
-- detections were driven through the host's speakers rather than a person in
-  the room. All ten keywords triggered detections. Reliability differs by
-  word: of the four re-tested over four repeats each, `down`, `left` and `no`
-  fired every time and `go` fired twice
-- what has **not** been validated: a human speaker, a room other than this one,
-  and any microphone distance beyond arm's length
+- the ten-keyword sweep was driven through the host's speakers. All ten
+  keywords triggered detections. Reliability differs by word: of the four
+  re-tested over four repeats each, `down`, `left` and `no` fired every time
+  and `go` fired twice
+- detections were then confirmed with a human speaker at the microphone
+- what has **not** been validated: a room other than this one, and any
+  microphone distance beyond arm's length
 
 ## Repository Layout
 
