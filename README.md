@@ -74,6 +74,9 @@ The example set is intentionally small and board-specific:
    Captures live Nicla Voice microphone audio, computes MFCC features on the
    host, runs ten-keyword spotting on BB15, and streams the waveform, the
    features and the class scores over USB CDC.
+7. `examples/bb15_nicla_vision_keyword_spotting`
+   The same keyword spotting pipeline driven by the Nicla Vision's onboard PDM
+   microphone. One desktop tool draws either board.
 
 All sketches are heavily commented and meant to be modified by users.
 
@@ -154,6 +157,36 @@ a 320-sample hop, a 640-point real FFT, 40 mel bins from 20 Hz to 4000 Hz, and
 49 frames of 10 coefficients, with spark's voice-activity gating, smoothing,
 threshold, debounce and chiming defaults hard-coded.
 
+### Nicla Vision Keyword Spotting
+
+The same demo on a Nicla Vision, listening on that board's onboard PDM
+microphone instead of a Nicla Voice's NDP120. Everything downstream of capture
+is identical value for value, and both boards speak the same USB protocol.
+
+```bash
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_keyword_spotting
+arduino-cli upload --fqbn arduino:mbed_nicla:nicla_vision --port /dev/cu.usbmodem101 examples/bb15_nicla_vision_keyword_spotting
+PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
+"$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem101
+```
+
+The config packet names the board, so `tools/bb15_kws_gui.py` serves either
+demo from the same command line and titles its window after whichever answered.
+
+What differs from the Nicla Voice demo:
+
+- **There is no boot wait.** No NDP120 firmware has to be loaded, so the sketch
+  answers as soon as the host opens the port.
+- **`Serial` is native USB CDC on the STM32H747**, so the baud value is not
+  load-bearing. The sketch and the tool both say 921600 anyway, so that one
+  command line works for either board.
+- **Capture is the core `PDM` library** on the STM32H747's DFSDM peripheral,
+  at 16 kHz mono into a 1024-byte double buffer. Dropped audio is counted as
+  PDM buffer overruns and reported through the same telemetry field.
+- **BB15 runs at 25 MHz SPI** here, the Nicla Vision human-detection example's
+  value, rather than the Nicla Voice demo's 8 MHz.
+
 ## The Desktop Tools And Python
 
 Both `tools/bb15_nicla_vision_preview.py` and
@@ -185,6 +218,7 @@ arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . e
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_dummy_inference_nicla_vision
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_human_detection
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . examples/bb15_nicla_voice_keyword_spotting
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_keyword_spotting
 ```
 
 Run these sequentially. Parallel `arduino-cli` compiles can race in the shared
@@ -230,6 +264,30 @@ Nicla Voice keyword spotting, as of September 2, 2026:
 - classification behaves correctly in both directions: room noise classifies as
   `unknown` and triggers nothing, and a spoken keyword triggers a detection and
   is named
+
+Nicla Vision keyword spotting, as of September 11, 2026:
+
+- the example compiles for `arduino:mbed_nicla:nicla_vision` and has been
+  hardware-validated end to end on a Nicla Vision with BB15 attached
+- `BB15Pinout::niclaVisionDefaults()` at **25 MHz SPI** was confirmed on
+  hardware: `begin()` reports IP version `0xBCA10309`, the 22 KB keyword model
+  loads from host memory, and inference returns results. Stepping down to the
+  Nicla Voice demo's 8 MHz was not needed
+- the PDM capture path is continuous under load: 2001 consecutive blocks over a
+  two-minute stream with zero dropped buffers and no sequence gaps, at a
+  measured 16.6 blocks per second against the 16.67 the block size implies
+- the link survives being picked up and dropped repeatedly: 37 connect and
+  disconnect cycles with the desktop tool, every one of which streamed
+- timings measured on device: under 1 ms per 60 ms block for the three MFCC
+  frames, and 2 ms per inference
+- resource use: 247,432 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
+  of static RAM
+- detections were driven through the host's speakers rather than a person in
+  the room. All ten keywords triggered detections. Reliability differs by
+  word: of the four re-tested over four repeats each, `down`, `left` and `no`
+  fired every time and `go` fired twice
+- what has **not** been validated: a human speaker, a room other than this one,
+  and any microphone distance beyond arm's length
 
 ## Repository Layout
 
