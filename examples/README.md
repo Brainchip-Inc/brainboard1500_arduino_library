@@ -57,7 +57,7 @@ arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . ex
 arduino-cli upload --fqbn arduino:mbed_nicla:nicla_voice --port /dev/cu.usbmodem9AD4C4763 examples/bb15_nicla_voice_keyword_spotting
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Replace the port with the one your operating system assigned. This demo streams

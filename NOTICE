@@ -328,7 +328,7 @@ carry no copyright notice, no license header, and no SPDX identifier:
       program.h
 
     tools/
-      bb15_nicla_voice_kws_gui.py
+      bb15_kws_gui.py
 
 License:     Undetermined from file contents.
 

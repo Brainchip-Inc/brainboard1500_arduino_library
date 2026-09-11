@@ -104,7 +104,8 @@ constexpr uint8_t kStatusOk = 0u;
 constexpr uint8_t kStatusMfccInitFailed = 0x81u;
 constexpr uint8_t kStatusMicrophoneFailed = 0x82u;
 constexpr uint8_t kStatusAkidaFailed = 0x83u;
-constexpr uint8_t kReservedByte = 0u;
+// Tells the shared desktop tool which board it is drawing.
+constexpr uint8_t kBoardIdNiclaVoice = 1u;
 
 // spark's kws_new_tags[], in the order the model's info.yaml gives.
 constexpr const char* kClassLabels[kClassCount] = {
@@ -316,7 +317,7 @@ void send_audio_config_packet() {
   write_u16(kScoreThresholdQ15);
   write_u16(kDebounceMs);
   Serial.write(kChimingThreshold);
-  Serial.write(kReservedByte);
+  Serial.write(kBoardIdNiclaVoice);
   Serial.flush();
 }
 

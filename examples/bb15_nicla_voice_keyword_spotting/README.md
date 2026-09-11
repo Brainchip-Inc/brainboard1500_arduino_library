@@ -28,7 +28,7 @@ below explains why and how to check:
 ```bash
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Replace the port with the one your operating system assigned. Read that section
@@ -116,7 +116,7 @@ scripts:
 ```bash
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Installing straight into the interpreter also works, but only if that
