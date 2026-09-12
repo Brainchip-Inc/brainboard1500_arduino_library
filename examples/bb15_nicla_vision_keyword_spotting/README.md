@@ -14,7 +14,9 @@ costs no RAM.
 
 Everything downstream of capture is the Nicla Voice demo's pipeline value for
 value: the same DC blocker, 960-sample blocks, RMS speech gate, MFCC front end,
-spectrogram ring, inference period, smoothing, threshold, debounce and chiming.
+spectrogram ring, inference period, smoothing, debounce and chiming. The one
+exception is the speech gate's RMS threshold, which scales with this board's
+microphone gain and so is higher here; "Microphone gain" below explains why.
 Both demos speak the same USB protocol and are drawn by the same desktop tool.
 
 ## Build and run
@@ -76,8 +78,9 @@ From there everything runs on the STM32H747 and BB15:
 The front end matches BrainChip's spark firmware value for value: 16 kHz, a
 320-sample hop, a 640-sample frame, a 640-point real FFT, 40 mel bins from
 20 Hz to 4000 Hz, and 49 frames of 10 coefficients. The gating, smoothing,
-threshold, debounce and chiming defaults are spark's, hard-coded rather than
-configurable.
+debounce and chiming defaults are spark's, hard-coded rather than configurable.
+The speech gate's RMS threshold is the one value that departs from spark, for
+the reason given under "Microphone gain".
 
 `mfcc.{h,cpp}`, `kiss_fft*.{c,h}`, `model_metadata.{h,cpp}` and `program.{h,cpp}`
 are byte-identical copies of the Nicla Voice example's. They are board
@@ -89,19 +92,27 @@ self-contained Arduino sketch folder.
 `PDM.setGain()` is not a decibel figure. The library turns it into a right shift
 of the DFSDM output, `attenuation = 8 - gain / 3` clamped at 0, over a default
 attenuation of 5 that applies when `setGain()` is never called. So only every
-third step changes anything, this demo's 8 gives an attenuation of 6, and 24 or
+third step changes anything, this demo's 12 gives an attenuation of 4, and 24 or
 above gives an attenuation of 0, which is the loudest the library goes.
 
-The pipeline's own gate is deliberately not a tuning knob: `kRmsThreshold` is
-spark's 550 and stays there. On the validated board speech at arm's length
-reaches a block RMS of 1400 to 2600 against a quiet-room floor near 280, so the
-gate opens on speech and stays shut on room noise. If a quieter room or a
-further microphone leaves the SPEECH badge dark, raise `kPdmGain` before
-reaching for the threshold: lowering the threshold lets room noise into the MFCC
-front end, which is what the gate exists to prevent. Raising the gain is not
-free either, since it moves block RMS against that fixed 550 and changes the
-MFCC magnitudes fed to the model, so detections have to be re-validated on
-hardware afterwards.
+`kPdmGain` and `kRmsThreshold` are one setting written as two constants, and
+moving either alone breaks the demo. Speech scales with the gain while the room
+floor barely does, so the threshold has to scale with the gain to go on sitting
+a fixed ratio below speech. At this demo's 12 and 2200, measured on the
+validated board: speech at arm's length peaks at a block RMS of roughly 5500 to
+9100 per utterance, median 6900, against a quiet room whose blocks sit near 1000
+and reached 2161 at their loudest over a minute without ever opening the gate.
+
+The threshold departs from spark's 550 because the gain departs from spark's. At
+attenuation 4 every block of that quiet minute clears 550, so 550 would not be a
+gate at all.
+
+If a quieter room or a further microphone leaves the SPEECH badge dark, raise
+`kPdmGain` and scale `kRmsThreshold` with it. Lowering the threshold on its own
+lets room noise into the MFCC front end, which is what the gate exists to
+prevent. Raising the gain is not free either, since it changes the MFCC
+magnitudes fed to the model, so detections have to be re-validated on hardware
+afterwards.
 
 ## Packets are built whole before they are sent
 
@@ -164,5 +175,6 @@ Validated end to end on a Nicla Vision with BB15 attached, Arduino mbed_nicla
 core 4.6.0. The "Validation Status" section of the repository root `README.md`
 is where what was measured, and what has not been validated yet, is recorded.
 
-One behavioural note that section does not carry: `go` is the keyword this
-model most often confuses, and it was the least reliable of the ten here.
+One behavioural note that section does not carry: the ten keywords are not
+equally reliable. `yes`, `go` and `up` are the weak ones, and they fail by not
+firing at all rather than by naming the wrong keyword.

@@ -271,20 +271,27 @@ Nicla Vision keyword spotting, as of September 11, 2026:
   hardware: `begin()` reports IP version `0xBCA10309`, the 22 KB keyword model
   loads from host memory, and inference returns results. Stepping down to the
   Nicla Voice demo's 8 MHz was not needed
-- the PDM capture path is continuous under load: 2001 consecutive blocks over a
-  two-minute stream with zero dropped buffers and no sequence gaps, at a
-  measured 16.6 blocks per second against the 16.67 the block size implies
+- the microphone runs at `kPdmGain` 12 against a speech gate of `kRmsThreshold`
+  2200. The two were measured together on the shipping firmware: over a quiet
+  minute, block RMS sat at a median of 1012 and peaked at 2161, so none of its
+  1000 blocks opened the gate, while spoken keywords peaked at a block RMS of
+  5500 to 9100 per utterance, median 6900, with no utterance saturating
+- the PDM capture path is continuous under load: 4750 consecutive blocks over a
+  285-second stream with zero dropped buffers and no sequence gaps, at a
+  measured 16.67 blocks per second, which is the cadence the block size implies
 - the link survives being picked up and dropped repeatedly: 37 connect and
   disconnect cycles with the desktop tool, every one of which streamed
 - timings measured on device: under 1 ms per 60 ms block for the three MFCC
   frames, and 2 ms per inference
 - resource use: 247,432 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
   of static RAM
-- the ten-keyword sweep was driven through the host's speakers. All ten
-  keywords triggered detections. Reliability differs by word: of the four
-  re-tested over four repeats each, `down`, `left` and `no` fired every time
-  and `go` fired twice
-- detections were then confirmed with a human speaker at the microphone
+- the ten-keyword sweep was driven through the host's speakers, eight repeats
+  per keyword, 63 of 79 utterances detected. `left`, `no`, `on`, `right` and
+  `stop` fired on all eight, `down` on seven, `off` on six, `go` and `up` on
+  four, and `yes` on two of seven. Every failure but one was the detection not
+  firing rather than the wrong keyword being named
+- detections were confirmed with a human speaker at the microphone at this
+  setting
 - what has **not** been validated: a room other than this one, and any
   microphone distance beyond arm's length
 
