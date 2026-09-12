@@ -283,7 +283,7 @@ Nicla Vision keyword spotting, as of September 11, 2026:
   disconnect cycles with the desktop tool, every one of which streamed
 - timings measured on device: under 1 ms per 60 ms block for the three MFCC
   frames, and 2 ms per inference
-- resource use: 247,432 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
+- resource use: 247,368 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
   of static RAM
 - the ten-keyword sweep was driven through the host's speakers, eight repeats
   per keyword, 63 of 79 utterances detected. `left`, `no`, `on`, `right` and
