@@ -28,8 +28,9 @@ constexpr size_t kPdmBufferSamples = kPdmBufferBytes / sizeof(int16_t);
 // The library turns this into a right shift of the DFSDM output,
 // attenuation = 8 - gain / 3 clamped at 0, over a default attenuation of 5, so
 // only every third step changes anything and 24 or above is the loudest it
-// goes. 8 gives an attenuation of 6.
-constexpr int kPdmGain = 8;
+// goes. 12 gives an attenuation of 4, chosen so speech at arm's length reaches
+// the feature front end at about the level the model's training corpus holds.
+constexpr int kPdmGain = 12;
 // One failed read is unremarkable; a run of them is reported as a fault.
 constexpr uint8_t kReadFailureLimit = 25u;
 
@@ -46,7 +47,10 @@ constexpr uint8_t kInferencePeriodBlocks = 3u;
 // Reported like any other class, but neither can trigger a detection.
 constexpr uint8_t kSilenceClass = 10u;
 constexpr uint8_t kUnknownClass = 11u;
-constexpr uint16_t kRmsThreshold = 550u;
+// Scaled with kPdmGain instead of taken from spark: the gate has to sit a fixed
+// ratio below speech, speech scales with the gain, and the room floor barely
+// does. The two constants only mean anything together.
+constexpr uint16_t kRmsThreshold = 2200u;
 constexpr uint16_t kSpeechActiveTimeMs = 1300u;
 constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
 constexpr uint16_t kScoreThresholdQ15 = 16384u;
