@@ -189,9 +189,8 @@ What differs from the Nicla Voice demo:
 
 ## The Desktop Tools And Python
 
-Both `tools/bb15_nicla_vision_preview.py` and
-`tools/bb15_kws_gui.py` need one Python environment carrying **both
-Tk 8.6 or later and `pyserial`**.
+Both `tools/bb15_nicla_vision_preview.py` and `tools/bb15_kws_gui.py` need one
+Python environment carrying **both Tk 8.6 or later and `pyserial`**.
 
 Apple's system Tcl/Tk 8.5, which `/usr/bin/python3` uses on macOS, renders
 nothing: the window opens at the right size and stays blank, with no error

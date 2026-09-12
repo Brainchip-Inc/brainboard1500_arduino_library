@@ -160,14 +160,9 @@ shortest way to confirm the link on its own, and it prints
 
 ## Validation
 
-Validated on a Nicla Vision with BB15 attached, Arduino mbed_nicla core 4.6.0:
+Validated end to end on a Nicla Vision with BB15 attached, Arduino mbed_nicla
+core 4.6.0. The "Validation Status" section of the repository root `README.md`
+is where what was measured, and what has not been validated yet, is recorded.
 
-- **BB15 SPI clock 25 MHz**, the value the Nicla Vision human-detection example
-  uses. `begin()`, model load and inference were all reliable at it, so the
-  8 MHz the Nicla Voice demo runs at was not needed here.
-- Block cadence held at 16.6 blocks per second with `dropped` at zero across a
-  two-minute continuous stream and 37 connect and disconnect cycles.
-- All ten keywords were driven through the host's speakers with `say`, and all
-  ten triggered detections. Reliability differs by word: of the four re-tested
-  over four repeats each, `down`, `left` and `no` fired every time and `go`
-  fired twice, `go` being the one this model most often confuses.
+One behavioural note that section does not carry: `go` is the keyword this
+model most often confuses, and it was the least reliable of the ten here.

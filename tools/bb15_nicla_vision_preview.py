@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Live USB preview for `bb15_nicla_vision_human_detection`.
 
 Requirements:
