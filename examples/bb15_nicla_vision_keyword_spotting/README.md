@@ -96,16 +96,26 @@ third step changes anything, this demo's 12 gives an attenuation of 4, and 24 or
 above gives an attenuation of 0, which is the loudest the library goes.
 
 `kPdmGain` and `kRmsThreshold` are one setting written as two constants, and
-moving either alone breaks the demo. Speech scales with the gain while the room
-floor barely does, so the threshold has to scale with the gain to go on sitting
-a fixed ratio below speech. At this demo's 12 and 2200, measured on the
-validated board: speech at arm's length peaks at a block RMS of roughly 5500 to
-9100 per utterance, median 6900, against a quiet room whose blocks sit near 1000
-and reached 2161 at their loudest over a minute without ever opening the gate.
+moving either alone breaks the demo. The gain is a right shift applied to
+everything the DFSDM produces, so speech and the room floor scale together and
+the threshold has to scale by the same factor to go on sitting where it sat.
+That is where 2200 comes from: the demo's earlier gain of 8 ran spark's 550 at
+attenuation 6, and attenuation 4 is two shifts louder, so the threshold moves by
+four as well.
 
-The threshold departs from spark's 550 because the gain departs from spark's. At
-attenuation 4 every block of that quiet minute clears 550, so 550 would not be a
-gate at all.
+Measured on the validated board at 12 and 2200, speech at arm's length peaks at
+a block RMS of roughly 5500 to 9100 per utterance, median 6900. Over a quiet
+minute in the same room the 1000 blocks ran from 608 to 2161, median 1012. None
+of them opened the gate, but the loudest came within 39 counts of it, 1.77
+percent, so the gate held by a narrow margin rather than comfortably, and a
+noisier room will open it.
+
+Spark's 550 is no gate at all at this gain: the quietest of those 1000 blocks
+was 608, so every one of them cleared 550 and the gate would have stood open for
+the whole minute. An earlier session in the same room measured a floor about
+three times lower, which is worth knowing before trusting either figure. The
+floor belongs to the room and the moment rather than to the board, so
+`kRmsThreshold` is worth re-measuring wherever the demo is set up.
 
 If a quieter room or a further microphone leaves the SPEECH badge dark, raise
 `kPdmGain` and scale `kRmsThreshold` with it. Lowering the threshold on its own
