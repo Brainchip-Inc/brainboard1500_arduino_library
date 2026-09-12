@@ -45,9 +45,9 @@ constexpr uint8_t kInferencePeriodBlocks = 3u;
 // Reported like any other class, but neither can trigger a detection.
 constexpr uint8_t kSilenceClass = 10u;
 constexpr uint8_t kUnknownClass = 11u;
-// Scaled with kPdmGain instead of taken from spark: the gate has to sit a fixed
-// ratio below speech, speech scales with the gain, and the room floor barely
-// does. The two constants only mean anything together.
+// Scaled with kPdmGain instead of taken from spark: the gain is a right shift
+// on every sample, so speech and the room floor move together and the gate has
+// to move by the same factor. The two constants only mean anything together.
 constexpr uint16_t kRmsThreshold = 2200u;
 constexpr uint16_t kSpeechActiveTimeMs = 1300u;
 constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
