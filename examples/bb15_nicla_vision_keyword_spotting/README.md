@@ -117,7 +117,7 @@ afterwards.
 ## Packets are built whole before they are sent
 
 Every `Serial.write()` on native USB CDC is its own blocking USB transfer.
-Writing a result packet field by field costs around 250 of them, sixteen times a
+Writing a result packet field by field costs around 444 of them, sixteen times a
 second, and a host that closes the port mid-packet can leave the sketch blocked
 in that path for good: it goes silent and stays silent until it is reset.
 

@@ -31,8 +31,6 @@ constexpr size_t kPdmBufferSamples = kPdmBufferBytes / sizeof(int16_t);
 // goes. 12 gives an attenuation of 4, chosen so speech at arm's length reaches
 // the feature front end at about the level the model's training corpus holds.
 constexpr int kPdmGain = 12;
-// One failed read is unremarkable; a run of them is reported as a fault.
-constexpr uint8_t kReadFailureLimit = 25u;
 
 // spark's values: rates from its source/Kconfig, the rest from
 // source/core/common/kws_config.c.
@@ -203,7 +201,6 @@ size_t g_block_fill = 0u;
 int64_t g_block_energy = 0;
 uint16_t g_block_peak = 0u;
 uint32_t g_block_capture_ms = 0u;
-uint8_t g_read_failures = 0u;
 uint32_t g_sequence = 0u;
 bool g_streaming = false;
 // Set when setup could not finish, so host commands are answered with the
@@ -833,14 +830,6 @@ bool capture_fresh_buffer() {
   const uint32_t started_ms = millis();
   const int read_bytes = PDM.read(g_pdm_samples, sizeof(g_pdm_samples));
   g_pdm_ready = false;
-  if (read_bytes <= 0) {
-    if (++g_read_failures >= kReadFailureLimit) {
-      g_read_failures = 0u;
-      send_error_packet(kStatusMicrophoneFailed);
-    }
-    return false;
-  }
-  g_read_failures = 0u;
   g_block_capture_ms += millis() - started_ms;
 
   const size_t count = static_cast<size_t>(read_bytes) / sizeof(int16_t);
@@ -863,7 +852,6 @@ void reset_capture_state() {
   g_block_energy = 0u;
   g_block_peak = 0u;
   g_block_capture_ms = 0u;
-  g_read_failures = 0u;
   g_pdm_overruns = 0u;
   g_pdm_ready = false;
   g_sequence = 0u;
