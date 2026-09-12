@@ -86,17 +86,22 @@ self-contained Arduino sketch folder.
 
 ## Microphone gain
 
-`PDM.setGain()` takes 0 to 8 on this board, and the library turns that into a
-right shift of the DFSDM output, so only every third step changes anything. This
-demo asks for 8, the loudest the library exposes.
+`PDM.setGain()` is not a decibel figure. The library turns it into a right shift
+of the DFSDM output, `attenuation = 8 - gain / 3` clamped at 0, over a default
+attenuation of 5 that applies when `setGain()` is never called. So only every
+third step changes anything, this demo's 8 gives an attenuation of 6, and 24 or
+above gives an attenuation of 0, which is the loudest the library goes.
 
-That is deliberately not a tuning knob for the pipeline: `kRmsThreshold` is
+The pipeline's own gate is deliberately not a tuning knob: `kRmsThreshold` is
 spark's 550 and stays there. On the validated board speech at arm's length
 reaches a block RMS of 1400 to 2600 against a quiet-room floor near 280, so the
 gate opens on speech and stays shut on room noise. If a quieter room or a
-further microphone leaves the SPEECH badge dark, move the board closer before
-reaching for the threshold: lowering it lets room noise into the MFCC front end,
-which is what the gate exists to prevent.
+further microphone leaves the SPEECH badge dark, raise `kPdmGain` before
+reaching for the threshold: lowering the threshold lets room noise into the MFCC
+front end, which is what the gate exists to prevent. Raising the gain is not
+free either, since it moves block RMS against that fixed 550 and changes the
+MFCC magnitudes fed to the model, so detections have to be re-validated on
+hardware afterwards.
 
 ## Packets are built whole before they are sent
 

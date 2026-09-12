@@ -25,8 +25,10 @@ constexpr uint32_t kIdleReportMs = 2000u;
 // and the required multiple of 512 bytes.
 constexpr size_t kPdmBufferBytes = 1024u;
 constexpr size_t kPdmBufferSamples = kPdmBufferBytes / sizeof(int16_t);
-// 0 to 8 on this board. The library turns it into a right shift of the DFSDM
-// output, so only every third step changes anything.
+// The library turns this into a right shift of the DFSDM output,
+// attenuation = 8 - gain / 3 clamped at 0, over a default attenuation of 5, so
+// only every third step changes anything and 24 or above is the loudest it
+// goes. 8 gives an attenuation of 6.
 constexpr int kPdmGain = 8;
 // One failed read is unremarkable; a run of them is reported as a fault.
 constexpr uint8_t kReadFailureLimit = 25u;
