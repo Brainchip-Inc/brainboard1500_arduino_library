@@ -39,11 +39,12 @@ than an error.
 It loads 516 KB of NDP120 firmware packages from the board's QSPI flash first.
 The tool retries across that window and shows `CONNECTING` while it waits.
 
-The USB link runs at **921600 baud**, not the 115200 the other examples use.
-`Serial` on this board is a UART bridged to USB by the onboard SAMD11, and at
-115200 one result packet takes 37 ms to drain, longer than the NDP120's 24 ms
-audio chunk period, which breaks the audio stream. The sketch and the tool both
-default to 921600; do not attach a text serial monitor while streaming.
+The USB link runs at **921600 baud**, not the 115200 the camera and flasher
+examples use. `Serial` on this board is a UART bridged to USB by the onboard
+SAMD11, and at 115200 one result packet takes 37 ms to drain, longer than the
+NDP120's 24 ms audio chunk period, which breaks the audio stream. The sketch
+and the tool both default to 921600; do not attach a text serial monitor while
+streaming.
 
 ## What runs where
 

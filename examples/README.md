@@ -75,7 +75,6 @@ the same environment**. See
 over a standalone CPython build is not enough, and for what to check when the
 board enumerates on USB but sends nothing.
 
-
 ## Nicla Vision Keyword Spotting
 
 The same demo on the Nicla Vision, listening on that board's onboard PDM

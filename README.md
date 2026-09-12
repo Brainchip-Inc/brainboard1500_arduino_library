@@ -119,8 +119,8 @@ Python 3.7 or later, `pyserial`, and the system Tk package used by `tkinter`.
 
 This demo needs no flasher sketch. Its keyword model is 22,112 bytes and is
 compiled into the sketch, so it lives in nRF52832 program flash and costs no
-RAM. The Nicla Vision demo makes the opposite choice because its VWW program is
-183,884 bytes.
+RAM. The Nicla Vision human-detection demo makes the opposite choice because
+its VWW program is 183,884 bytes.
 
 ```bash
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . examples/bb15_nicla_voice_keyword_spotting
@@ -135,13 +135,12 @@ on your PATH; see "The Desktop Tools And Python" below.
 Replace the port with the one your operating system assigned. It recognises
 `down`, `go`, `left`, `no`, `off`, `on`, `right`, `stop`, `up` and `yes`.
 
-Three things about this demo differ from the others, and all three will look
-like faults if they are not expected:
+Three things about this demo will look like faults if they are not expected:
 
-- **It streams at 921600 baud**, not 115200. `Serial` on Nicla Voice is a UART
-  bridged to USB by the onboard SAMD11, and at 115200 one result packet takes
-  longer to drain than the NDP120's 24 ms audio chunk period, which breaks the
-  audio stream.
+- **It streams at 921600 baud**, not the 115200 the camera and flasher examples
+  use. `Serial` on Nicla Voice is a UART bridged to USB by the onboard SAMD11,
+  and at 115200 one result packet takes longer to drain than the NDP120's 24 ms
+  audio chunk period, which breaks the audio stream.
 - **The sketch needs about ten seconds after reset** before it answers
   anything, because it loads the NDP120 firmware packages from the board's QSPI
   flash first. The desktop tool retries across that window.
