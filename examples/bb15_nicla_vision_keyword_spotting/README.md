@@ -52,11 +52,11 @@ the tool both say 921600 so that one command line works for either board.
 ## What runs where
 
 The Nicla Vision's MP34DT06JTR microphone is wired to the STM32H747's DFSDM
-peripheral, so audio arrives in the application processor directly and the core's
-bundled `PDM` library is the whole capture path. The DFSDM delivers 256 samples
-per half transfer, and `py_audio_init()` will not accept a double buffer smaller
-than 1024 bytes, so the demo asks for exactly that: 512 samples, 32 ms of audio
-per callback.
+peripheral, so audio arrives in the application processor directly and the
+core's bundled `PDM` library is the whole capture path. The DFSDM delivers 256
+samples per half transfer, and `py_audio_init()` will not accept a double buffer
+smaller than 1024 bytes, so the demo asks for exactly that: 512 samples, 32 ms
+of audio per callback.
 
 Two details of that library shape the sketch:
 
