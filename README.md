@@ -273,9 +273,13 @@ Nicla Vision keyword spotting, as of September 11, 2026:
   Nicla Voice demo's 8 MHz was not needed
 - the microphone runs at `kPdmGain` 12 against a speech gate of `kRmsThreshold`
   2200. The two were measured together on the shipping firmware: over a quiet
-  minute, block RMS sat at a median of 1012 and peaked at 2161, so none of its
-  1000 blocks opened the gate, while spoken keywords peaked at a block RMS of
-  5500 to 9100 per utterance, median 6900, with no utterance saturating
+  minute the 1000 blocks ran from 608 to 2161, median 1012, and none opened the
+  gate, but the loudest came within 39 counts of it, 1.77 percent, so the gate
+  held by a narrow margin rather than comfortably and a noisier room will open
+  it. Spoken keywords peaked at a block RMS of 5500 to 9100 per utterance,
+  median 6900, with no utterance saturating. The quiet floor belongs to the room
+  rather than the board: an earlier session in the same room measured it about
+  three times lower
 - the PDM capture path is continuous under load: 4750 consecutive blocks over a
   285-second stream with zero dropped buffers and no sequence gaps, at a
   measured 16.67 blocks per second, which is the cadence the block size implies
