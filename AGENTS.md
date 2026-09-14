@@ -152,6 +152,15 @@ Leave `library.properties` alone, especially `version=`. It is the one file both
 so every local change to it turns the next upstream sync into a merge conflict. Change it only when a human
 explicitly asks for a release bump.
 
+## Streaming to a host over native USB CDC
+
+On Nicla Vision `Serial` is a native USB CDC endpoint, not a UART, and every `Serial.write()` is its own
+blocking USB transfer. A sketch that writes a packet field by field can block in that path for good when the
+host closes the port mid-packet: the board goes silent and stays silent until it is reset, while still
+enumerating and still handing out a serial port. Build each packet whole and hand it over in one
+`Serial.write(buffer, size)`. `examples/bb15_nicla_vision_keyword_spotting/` does this and its `README.md`
+explains it; the Nicla Voice demo does not need to, because its `Serial` is a UART bridged to USB by a SAMD11.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

@@ -1,11 +1,15 @@
-"""Live USB view for `bb15_nicla_voice_keyword_spotting`.
+"""Live USB view for the BB15 keyword spotting demos.
+
+Serves both `bb15_nicla_voice_keyword_spotting` and
+`bb15_nicla_vision_keyword_spotting`, which send the same audio protocol and
+name themselves in the board field of their config packet.
 
 Requirements:
   python3 -m pip install pyserial
   tkinter from the operating system's Python package
 
 Usage:
-  python3 tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+  python3 tools/bb15_kws_gui.py --port /dev/cu.usbmodem101
 """
 
 from __future__ import annotations
@@ -33,12 +37,15 @@ MESSAGE_ERROR = 0x83
 MESSAGE_AUDIO_CONFIG = 0x84
 MESSAGE_AUDIO_RESULT = 0x85
 # Anything outside this set is the Syntiant library's own code, reported
-# verbatim by the sketch after a failed chunk read.
+# verbatim by the Nicla Voice sketch after a failed chunk read.
 DEVICE_ERRORS = {
     0x81: "the MFCC front end could not start",
-    0x82: "the NDP120 microphone did not start, try a power cycle",
+    0x82: "the microphone did not start, try a power cycle",
     0x83: "BB15 did not come up, check the board is seated",
 }
+
+# The board field of the config packet.
+BOARD_NAMES = {1: "Nicla Voice", 2: "Nicla Vision"}
 
 # spark's kws_new_tags[], in the order the model's info.yaml gives.
 CLASS_LABELS = (
@@ -160,6 +167,7 @@ class AudioConfig:
     score_threshold_q15: int
     debounce_ms: int
     chiming_threshold: int
+    board_id: int
 
     @property
     def block_ms(self) -> float:
@@ -197,7 +205,7 @@ def parse_args() -> argparse.Namespace:
     """Read the serial port and baud rate from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--port", required=True, help="Serial device, e.g. /dev/cu.usbmodem9AD4C4763"
+        "--port", required=True, help="Serial device, e.g. /dev/cu.usbmodem101"
     )
     parser.add_argument(
         "--baud",
@@ -285,8 +293,7 @@ def parse_audio_config(payload: bytes) -> AudioConfig:
     """
     if len(payload) != AUDIO_CONFIG.size:
         raise ValueError(f"invalid config payload size: {len(payload)}")
-    fields = AUDIO_CONFIG.unpack(payload)
-    return AudioConfig(*fields[:12])
+    return AudioConfig(*AUDIO_CONFIG.unpack(payload))
 
 
 def parse_audio_result(payload: bytes) -> AudioResult:
@@ -372,13 +379,14 @@ class KeywordSpottingWindow:
         self._config: AudioConfig | None = None
         self._canvas_width = 1
         self._canvas_height = 1
+        self._root = root
 
-        root.title("BB15 Nicla Voice Keyword Spotting")
         root.geometry("980x720")
         root.minsize(880, 640)
         root.configure(bg=COLOR_PAGE)
 
         self._build_header(root)
+        self._name_board(0)
         content = tk.Frame(root, bg=COLOR_PAGE, padx=20, pady=18)
         content.pack(fill="both", expand=True)
         self._build_result_card(content)
@@ -389,13 +397,14 @@ class KeywordSpottingWindow:
         """Create the dark banner naming the board and the demo."""
         header = tk.Frame(root, bg=COLOR_HEADER, padx=24, pady=16)
         header.pack(fill="x")
-        tk.Label(
+        self._board_label = tk.Label(
             header,
-            text="BB15  /  NICLA VOICE",
+            text="",
             bg=COLOR_HEADER,
             fg=COLOR_HEADER_ACCENT,
             font=("TkDefaultFont", 10, "bold"),
-        ).pack(anchor="w")
+        )
+        self._board_label.pack(anchor="w")
         tk.Label(
             header,
             text="Live keyword spotting",
@@ -751,9 +760,25 @@ class KeywordSpottingWindow:
         )
         self._connection_label.configure(text="STREAMING", fg=COLOR_OK)
 
+    def _name_board(self, board_id: int) -> None:
+        """Put the board the device reported in the window title and the banner.
+
+        Args:
+            board_id: Board field from the config packet. Zero, which is what a
+                sketch predating the field sends, names the demo instead.
+        """
+        board = BOARD_NAMES.get(board_id)
+        self._root.title(
+            f"BB15 {board} Keyword Spotting" if board else "BB15 Keyword Spotting"
+        )
+        self._board_label.configure(
+            text=f"BB15  /  {board.upper()}" if board else "BB15  /  KEYWORD SPOTTING"
+        )
+
     def set_streaming(self, config: AudioConfig) -> None:
         """Adopt the device's pipeline description and show the listening state."""
         self._config = config
+        self._name_board(config.board_id)
         self._clear_live_view()
         self._mark_live()
         self._scores_shown = ()

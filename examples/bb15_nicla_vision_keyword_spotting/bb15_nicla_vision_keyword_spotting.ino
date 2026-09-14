@@ -1,43 +1,36 @@
 #include <Arduino.h>
 #include <BB15.h>
-#include <NDP.h>
+#include <PDM.h>
 
 #include "akida/program_info.h"
 #include "mfcc.h"
 #include "model_metadata.h"
 #include "program.h"
 
-// nicla_voice and nicla_sense share the NICLA variant, so this rejects other
-// families only.
-#ifndef ARDUINO_NICLA
-#error "bb15_nicla_voice_keyword_spotting requires Arduino Nicla Voice."
+#ifndef ARDUINO_NICLA_VISION
+#error "bb15_nicla_vision_keyword_spotting requires Arduino Nicla Vision."
 #endif
 
 namespace {
 
 constexpr uint32_t kSerialBaud = 921600u;
+constexpr uint32_t kSerialWaitMs = 3000u;
 constexpr uint32_t kBootSettleMs = 250u;
 
 // So a listener can tell an idle board from a wedged one.
 constexpr uint32_t kIdleReportMs = 2000u;
 
-// Already in the board's QSPI flash.
-constexpr const char* kNdpMcuFirmware = "mcu_fw_120_v90.synpkg";
-constexpr const char* kNdpDspFirmware = "dsp_firmware_v90.synpkg";
-constexpr const char* kNdpAudioFlowPackage =
-    "alexa_334_NDP120_B0_v11_v90.synpkg";
-
-// The NDP120 holds one 24 ms chunk of 16 kHz mono PCM until the next replaces
-// it. The third byte of each chunk's trailing annotation is a monotonic
-// counter.
-constexpr size_t kChunkBufferBytes = 1024u;
-constexpr size_t kAnnotationBytes = 4u;
-constexpr size_t kAnnotationCounterOffset = 2u;
-constexpr uint32_t kChunkPeriodMs = 24u;
-constexpr uint32_t kChunkPollLeadMs = 3u;
-constexpr uint32_t kChunkRetryMs = 2u;
-// One failed read is unremarkable; a run of them is reported as a fault.
-constexpr uint8_t kChunkFailureLimit = 25u;
+// The DFSDM half-transfer hands the PDM library 256 samples at a time, and
+// py_audio_init() raises anything smaller to this, so it is both the minimum
+// and the required multiple of 512 bytes.
+constexpr size_t kPdmBufferBytes = 1024u;
+constexpr size_t kPdmBufferSamples = kPdmBufferBytes / sizeof(int16_t);
+// The library turns this into a right shift of the DFSDM output,
+// attenuation = 8 - gain / 3 clamped at 0, over a default attenuation of 5, so
+// only every third step changes anything and 24 or above is the loudest it
+// goes. 12 gives an attenuation of 4, chosen so speech at arm's length reaches
+// the feature front end at about the level the model's training corpus holds.
+constexpr int kPdmGain = 12;
 
 // spark's values: rates from its source/Kconfig, the rest from
 // source/core/common/kws_config.c.
@@ -52,7 +45,13 @@ constexpr uint8_t kInferencePeriodBlocks = 3u;
 // Reported like any other class, but neither can trigger a detection.
 constexpr uint8_t kSilenceClass = 10u;
 constexpr uint8_t kUnknownClass = 11u;
-constexpr uint16_t kRmsThreshold = 550u;
+// Scaled from spark's 550 by the measured noise floor rather than by kPdmGain.
+// The gain is a right shift on every sample, so speech rose fourfold with it,
+// but the floor only rose about 2.2 times, 293 to 650, because roughly 250 of
+// those counts are fixed in the board rather than acoustic. Twice spark's value
+// is the scaling the room supports; four times was set for noise that never
+// arrived, and it clipped the onset off every word.
+constexpr uint16_t kRmsThreshold = 1100u;
 constexpr uint16_t kSpeechActiveTimeMs = 1300u;
 constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
 constexpr uint16_t kScoreThresholdQ15 = 16384u;
@@ -70,7 +69,7 @@ constexpr float kMfccFullScale = 123.56967163085938f;
 // cleared ring holds 128 to feed the model the bytes spark would.
 constexpr uint8_t kClearedFeature = 128u;
 
-constexpr uint32_t kAkidaSpiClockHz = 8000000u;
+constexpr uint32_t kAkidaSpiClockHz = 25000000u;
 
 // spark's DC blocker coefficient, from its dc_block_process().
 constexpr int32_t kDcBlockAlphaQ15 = 32700;
@@ -95,25 +94,33 @@ constexpr size_t kPacketHeaderBytes = 10u;
 constexpr size_t kAudioConfigBytes = 24u;
 constexpr size_t kAudioResultMetadataBytes = 28u;
 
+// An audio-result packet is the largest this demo sends, and it is built whole
+// before being handed over: on native USB CDC every Serial.write() is its own
+// blocking transfer, so writing a packet field by field costs hundreds of them.
+constexpr size_t kMaxPacketBytes =
+    kPacketHeaderBytes + kAudioResultMetadataBytes +
+    2u * sizeof(int16_t) * kWaveformPoints +
+    kMfccFramesPerBlock * kSpectrogramCoefficients +
+    sizeof(int16_t) * kClassCount;
+
+// Tells the shared desktop tool which board it is drawing.
+constexpr uint8_t kBoardIdNiclaVision = 2u;
+
 // Sent in the predicted-index field when nothing has been detected.
 constexpr uint8_t kNoPrediction = 0xFFu;
 constexpr uint8_t kStatusOk = 0u;
 
-// Above the small positive range the Syntiant library uses for its own errors,
-// which a chunk-capture failure reports verbatim.
 constexpr uint8_t kStatusMfccInitFailed = 0x81u;
 constexpr uint8_t kStatusMicrophoneFailed = 0x82u;
 constexpr uint8_t kStatusAkidaFailed = 0x83u;
-// Tells the shared desktop tool which board it is drawing.
-constexpr uint8_t kBoardIdNiclaVoice = 1u;
 
 // spark's kws_new_tags[], in the order the model's info.yaml gives.
 constexpr const char* kClassLabels[kClassCount] = {
     "down",  "go",   "left", "no",  "off",     "on",
     "right", "stop", "up",   "yes", "silence", "unknown"};
 
-constexpr const char* kSketchName = "bb15_nicla_voice_keyword_spotting";
-constexpr const char* kLogPrefix = "[bb15_nicla_voice_keyword_spotting]";
+constexpr const char* kSketchName = "bb15_nicla_vision_keyword_spotting";
+constexpr const char* kLogPrefix = "[bb15_nicla_vision_keyword_spotting]";
 
 /** @brief One completed 60 ms audio block, ready to stream to the host. */
 struct AudioBlock {
@@ -132,6 +139,14 @@ enum class SpeechState : uint8_t {
   Active,
 };
 
+/** @brief What the RGB LED is saying about the demo's state. */
+enum class StatusLed : uint8_t {
+  Off,
+  Red,
+  Green,
+  Blue,
+};
+
 /** @brief The Akida runtime state this demo keeps across blocks. */
 struct Classifier {
   float smoothed[kClassCount] = {};
@@ -145,25 +160,18 @@ struct Classifier {
   uint16_t inferMs = 0u;
 };
 
-/**
- * @brief How far chunk synchronization has got since the last stream start.
- *
- * The NDP120's holding tank keeps running while no stream is being served, so
- * the first counter gaps a fresh stream sees say nothing about continuity.
- */
-enum class ChunkSync : uint8_t {
-  NoCounter,
-  Seeded,
-  Running,
-};
-
 /** @brief Running state of spark's first-order DC blocking high-pass. */
 struct DcBlockState {
   int32_t previousInput = 0;
   int32_t previousOutput = 0;
 };
 
-alignas(4) uint8_t g_chunk[kChunkBufferBytes];
+uint8_t g_packet[kMaxPacketBytes];
+size_t g_packet_fill = 0u;
+int16_t g_pdm_samples[kPdmBufferSamples];
+// Written by the PDM interrupt, read by loop().
+volatile bool g_pdm_ready = false;
+volatile uint16_t g_pdm_overruns = 0u;
 // spark's mfcc_process_input() layout: [0, hop) is the previous block's last
 // hop, [hop, hop + block) is this one.
 int16_t g_mfcc_input[kMfccHopSamples + kBlockSamples];
@@ -179,7 +187,7 @@ uint32_t g_speech_started_ms = 0u;
 // The model input, unrolled oldest frame first the way spark builds it.
 uint8_t g_model_input[kSpectrogramFrames * kSpectrogramCoefficients];
 Classifier g_classifier;
-BB15Pinout g_pinout = BB15Pinout::niclaVoiceDefaults();
+BB15Pinout g_pinout = BB15Pinout::niclaVisionDefaults();
 BB15Config g_config = []() {
   BB15Config config = BB15Config::defaults();
   config.spiClockHz = kAkidaSpiClockHz;
@@ -196,11 +204,6 @@ size_t g_block_fill = 0u;
 int64_t g_block_energy = 0;
 uint16_t g_block_peak = 0u;
 uint32_t g_block_capture_ms = 0u;
-uint8_t g_last_chunk_counter = 0u;
-uint8_t g_chunk_failures = 0u;
-ChunkSync g_chunk_sync = ChunkSync::NoCounter;
-uint32_t g_next_chunk_poll_ms = 0u;
-uint16_t g_dropped_chunks = 0u;
 uint32_t g_sequence = 0u;
 bool g_streaming = false;
 // Set when setup could not finish, so host commands are answered with the
@@ -219,11 +222,24 @@ uint16_t clamp_u16(uint32_t value) {
 }
 
 /**
- * @brief Show the demo's state on the RGB LED.
- *
- * @param color  Colour to display, or `off` to clear it.
+ * @brief Give the host a moment to open the native USB CDC port.
  */
-void set_led(RGBColors color) { nicla::leds.setColor(color); }
+void wait_for_serial() {
+  const uint32_t start_ms = millis();
+  while (!Serial && (millis() - start_ms) < kSerialWaitMs) {
+  }
+}
+
+/**
+ * @brief Show the demo's state on the RGB LED, whose pins are active low.
+ *
+ * @param color  Colour to display, or `Off` to clear it.
+ */
+void set_led(StatusLed color) {
+  digitalWrite(LEDR, color == StatusLed::Red ? LOW : HIGH);
+  digitalWrite(LEDG, color == StatusLed::Green ? LOW : HIGH);
+  digitalWrite(LEDB, color == StatusLed::Blue ? LOW : HIGH);
+}
 
 /**
  * @brief Record a setup failure and report it on the serial port.
@@ -259,77 +275,101 @@ void report_idle_state() {
 }
 
 /**
- * @brief Write a little-endian unsigned 16-bit value to the host.
+ * @brief Append one byte to the packet being built.
  *
- * @param value  Value to write.
+ * @param value  Byte to append.
  */
-void write_u16(uint16_t value) {
-  Serial.write(static_cast<uint8_t>(value & 0xFFu));
-  Serial.write(static_cast<uint8_t>((value >> 8) & 0xFFu));
+void append_u8(uint8_t value) { g_packet[g_packet_fill++] = value; }
+
+/**
+ * @brief Append a little-endian unsigned 16-bit value to the packet.
+ *
+ * @param value  Value to append.
+ */
+void append_u16(uint16_t value) {
+  append_u8(static_cast<uint8_t>(value & 0xFFu));
+  append_u8(static_cast<uint8_t>((value >> 8) & 0xFFu));
 }
 
 /**
- * @brief Write a little-endian unsigned 32-bit value to the host.
+ * @brief Append a little-endian unsigned 32-bit value to the packet.
  *
- * @param value  Value to write.
+ * @param value  Value to append.
  */
-void write_u32(uint32_t value) {
+void append_u32(uint32_t value) {
   for (uint8_t shift = 0u; shift < 32u; shift += 8u) {
-    Serial.write(static_cast<uint8_t>((value >> shift) & 0xFFu));
+    append_u8(static_cast<uint8_t>((value >> shift) & 0xFFu));
   }
 }
 
 /**
- * @brief Write a little-endian signed 16-bit value to the host.
+ * @brief Append a little-endian signed 16-bit value to the packet.
  *
- * @param value  Value to write.
+ * @param value  Value to append.
  */
-void write_i16(int16_t value) { write_u16(static_cast<uint16_t>(value)); }
+void append_i16(int16_t value) { append_u16(static_cast<uint16_t>(value)); }
 
 /**
- * @brief Write the fixed ten-byte protocol header.
+ * @brief Append a run of bytes to the packet being built.
+ *
+ * @param values  Bytes to append.
+ * @param count   Number of bytes to append.
+ */
+void append_bytes(const uint8_t* values, size_t count) {
+  memcpy(&g_packet[g_packet_fill], values, count);
+  g_packet_fill += count;
+}
+
+/**
+ * @brief Start a packet with the fixed ten-byte protocol header.
  *
  * @param type           Message type that follows.
  * @param payload_bytes  Size of the payload after the header.
  */
-void write_packet_header(PacketType type, uint32_t payload_bytes) {
-  Serial.write(kProtocolMagic, sizeof(kProtocolMagic));
-  Serial.write(kProtocolVersion);
-  Serial.write(static_cast<uint8_t>(type));
-  write_u32(payload_bytes);
+void begin_packet(PacketType type, uint32_t payload_bytes) {
+  g_packet_fill = 0u;
+  append_bytes(kProtocolMagic, sizeof(kProtocolMagic));
+  append_u8(kProtocolVersion);
+  append_u8(static_cast<uint8_t>(type));
+  append_u32(payload_bytes);
 }
+
+/**
+ * @brief Hand the built packet to the host in a single write.
+ */
+void send_packet() { Serial.write(g_packet, g_packet_fill); }
 
 /**
  * @brief Send the pipeline description the desktop tool needs to draw itself.
  */
 void send_audio_config_packet() {
-  write_packet_header(PacketType::AudioConfig,
-                      static_cast<uint32_t>(kAudioConfigBytes));
-  write_u32(kSampleRateHz);
-  write_u16(kBlockSamples);
-  write_u16(kWaveformPoints);
-  write_u16(kSpectrogramFrames);
-  Serial.write(kSpectrogramCoefficients);
-  Serial.write(kClassCount);
-  write_u16(kRmsThreshold);
-  write_u16(kSpeechActiveTimeMs);
-  write_u16(kSmoothingAlphaQ15);
-  write_u16(kScoreThresholdQ15);
-  write_u16(kDebounceMs);
-  Serial.write(kChimingThreshold);
-  Serial.write(kBoardIdNiclaVoice);
-  Serial.flush();
+  begin_packet(PacketType::AudioConfig,
+               static_cast<uint32_t>(kAudioConfigBytes));
+  append_u32(kSampleRateHz);
+  append_u16(kBlockSamples);
+  append_u16(kWaveformPoints);
+  append_u16(kSpectrogramFrames);
+  append_u8(kSpectrogramCoefficients);
+  append_u8(kClassCount);
+  append_u16(kRmsThreshold);
+  append_u16(kSpeechActiveTimeMs);
+  append_u16(kSmoothingAlphaQ15);
+  append_u16(kScoreThresholdQ15);
+  append_u16(kDebounceMs);
+  append_u8(kChimingThreshold);
+  append_u8(kBoardIdNiclaVision);
+  send_packet();
 }
 
 /**
  * @brief Report a device-side failure to the desktop tool.
  *
- * @param status  Syntiant interface library status for the failed operation.
+ * @param status  Status code for the failed operation.
  */
 void send_error_packet(uint8_t status) {
-  write_packet_header(PacketType::Error, 1u);
-  Serial.write(status);
-  Serial.flush();
+  begin_packet(PacketType::Error, 1u);
+  append_u8(status);
+  send_packet();
 }
 
 /**
@@ -344,43 +384,43 @@ void send_audio_result_packet(const AudioBlock& block) {
       static_cast<uint32_t>(g_new_frame_count) * kSpectrogramCoefficients;
   const uint32_t score_bytes =
       static_cast<uint32_t>(sizeof(int16_t)) * kClassCount;
-  write_packet_header(PacketType::AudioResult,
-                      static_cast<uint32_t>(kAudioResultMetadataBytes) +
-                          waveform_bytes + feature_bytes + score_bytes);
-  write_u32(block.sequence);
-  write_u32(block.deviceMs);
-  write_u16(block.rms);
-  write_u16(block.peak);
-  write_u16(g_dropped_chunks);
-  write_u16(block.captureMs);
-  write_u16(block.featureMs);
-  write_u16(g_classifier.inferMs);
-  Serial.write(static_cast<uint8_t>(block.speechActive ? 1u : 0u));
-  Serial.write(kStatusOk);
-  Serial.write(g_classifier.predicted);
-  Serial.write(kClassCount);
-  Serial.write(static_cast<uint8_t>(kWaveformPoints));
-  Serial.write(g_new_frame_count);
-  Serial.write(g_classifier.predicted == kNoPrediction
-                   ? 0u
-                   : g_classifier.chiming[g_classifier.predicted]);
-  Serial.write(g_classifier.detections);
+  begin_packet(PacketType::AudioResult,
+               static_cast<uint32_t>(kAudioResultMetadataBytes) +
+                   waveform_bytes + feature_bytes + score_bytes);
+  append_u32(block.sequence);
+  append_u32(block.deviceMs);
+  append_u16(block.rms);
+  append_u16(block.peak);
+  append_u16(g_pdm_overruns);
+  append_u16(block.captureMs);
+  append_u16(block.featureMs);
+  append_u16(g_classifier.inferMs);
+  append_u8(static_cast<uint8_t>(block.speechActive ? 1u : 0u));
+  append_u8(kStatusOk);
+  append_u8(g_classifier.predicted);
+  append_u8(kClassCount);
+  append_u8(static_cast<uint8_t>(kWaveformPoints));
+  append_u8(g_new_frame_count);
+  append_u8(g_classifier.predicted == kNoPrediction
+                ? 0u
+                : g_classifier.chiming[g_classifier.predicted]);
+  append_u8(g_classifier.detections);
   for (uint16_t point = 0u; point < 2u * kWaveformPoints; ++point) {
-    write_i16(g_waveform[point]);
+    append_i16(g_waveform[point]);
   }
-  Serial.write(g_new_features, static_cast<size_t>(g_new_frame_count) *
+  append_bytes(g_new_features, static_cast<size_t>(g_new_frame_count) *
                                    kSpectrogramCoefficients);
   for (uint8_t index = 0u; index < kClassCount; ++index) {
-    write_i16(static_cast<int16_t>(g_classifier.smoothed[index] * 32767.0f));
+    append_i16(static_cast<int16_t>(g_classifier.smoothed[index] * 32767.0f));
   }
-  Serial.flush();
+  send_packet();
 }
 
 /**
  * @brief Read at most one host command from the serial input.
  *
- * Parsing byte by byte lets the boot banner and the NDP library's own output
- * pass through harmlessly when a tool opens the port while they are buffered.
+ * Parsing byte by byte lets the boot banner pass through harmlessly when a tool
+ * opens the port while it is still buffered.
  *
  * @return The command received, or type 0 when no complete command is pending.
  */
@@ -423,7 +463,7 @@ PacketType poll_host_command() {
 /**
  * @brief Apply spark's DC blocking high-pass to captured samples in place.
  *
- * The filter state carries between calls, so a chunk boundary does not reset
+ * The filter state carries between calls, so a buffer boundary does not reset
  * it.
  *
  * @param samples  Samples to filter, overwritten with the filtered signal.
@@ -767,55 +807,37 @@ void accumulate_samples(const int16_t* samples, size_t count) {
 }
 
 /**
- * @brief Take the next microphone chunk from the NDP120 when one is due.
+ * @brief Note that the PDM library has filled a buffer.
  *
- * Polls just before a chunk is due and retries until the annotation counter
- * changes, so each is taken once and a gap in it counts as dropped audio.
- *
- * @return True when a fresh chunk was consumed.
+ * Runs in interrupt context, so it only raises a flag. A buffer that is still
+ * unread when the next one lands is audio this demo never saw, and is counted
+ * the way the Nicla Voice demo counts a gap in the NDP120 chunk counter.
  */
-bool capture_fresh_chunk() {
-  if (static_cast<int32_t>(millis() - g_next_chunk_poll_ms) < 0) {
+void on_pdm_data() {
+  if (g_pdm_ready) {
+    ++g_pdm_overruns;
+  }
+  g_pdm_ready = true;
+}
+
+/**
+ * @brief Take the next microphone buffer from the PDM library when one is
+ *        ready.
+ *
+ * @return True when a fresh buffer was consumed.
+ */
+bool capture_fresh_buffer() {
+  if (!g_pdm_ready) {
     return false;
   }
-
-  unsigned int length = 0u;
   const uint32_t started_ms = millis();
-  const int status = NDP.extractData(g_chunk, &length);
-  if (status != 0 || length == 0u ||
-      length + kAnnotationBytes > sizeof(g_chunk)) {
-    g_next_chunk_poll_ms = millis() + kChunkRetryMs;
-    if (++g_chunk_failures >= kChunkFailureLimit) {
-      g_chunk_failures = 0u;
-      send_error_packet(static_cast<uint8_t>(status));
-    }
-    return false;
-  }
-  g_chunk_failures = 0u;
-
-  const uint8_t counter = g_chunk[length + kAnnotationCounterOffset];
-  if (g_chunk_sync != ChunkSync::NoCounter && counter == g_last_chunk_counter) {
-    g_next_chunk_poll_ms = millis() + kChunkRetryMs;
-    return false;
-  }
-  const uint8_t advance = static_cast<uint8_t>(counter - g_last_chunk_counter);
-  g_last_chunk_counter = counter;
-  g_next_chunk_poll_ms = millis() + kChunkPeriodMs - kChunkPollLeadMs;
-
-  // Two consecutive chunks confirm the stream is being kept up with.
-  if (g_chunk_sync != ChunkSync::Running) {
-    g_chunk_sync = g_chunk_sync == ChunkSync::Seeded && advance == 1u
-                       ? ChunkSync::Running
-                       : ChunkSync::Seeded;
-    return false;
-  }
-  g_dropped_chunks = static_cast<uint16_t>(g_dropped_chunks + (advance - 1u));
+  const int read_bytes = PDM.read(g_pdm_samples, sizeof(g_pdm_samples));
+  g_pdm_ready = false;
   g_block_capture_ms += millis() - started_ms;
 
-  int16_t* samples = reinterpret_cast<int16_t*>(g_chunk);
-  const size_t count = length / sizeof(int16_t);
-  remove_dc_offset(samples, count);
-  accumulate_samples(samples, count);
+  const size_t count = static_cast<size_t>(read_bytes) / sizeof(int16_t);
+  remove_dc_offset(g_pdm_samples, count);
+  accumulate_samples(g_pdm_samples, count);
   return true;
 }
 
@@ -833,11 +855,9 @@ void reset_capture_state() {
   g_block_energy = 0u;
   g_block_peak = 0u;
   g_block_capture_ms = 0u;
-  g_chunk_sync = ChunkSync::NoCounter;
-  g_chunk_failures = 0u;
-  g_dropped_chunks = 0u;
+  g_pdm_overruns = 0u;
+  g_pdm_ready = false;
   g_sequence = 0u;
-  g_next_chunk_poll_ms = millis();
 }
 
 /**
@@ -870,39 +890,35 @@ bool prepare_akida() {
 }
 
 /**
- * @brief Load the NDP120 firmware and start the microphone.
+ * @brief Start the onboard PDM microphone.
  *
- * @return True when the microphone is streaming audio chunks.
+ * The buffer size is set first because begin() captures the buffer pointer,
+ * and resizing afterwards would leave the library filling freed memory.
+ *
+ * @return True when the microphone is streaming audio buffers.
  */
 bool prepare_microphone() {
-  if (NDP.begin(kNdpMcuFirmware) != 1 || NDP.load(kNdpDspFirmware) != 1 ||
-      NDP.load(kNdpAudioFlowPackage) != 1) {
-    return false;
-  }
-  if (NDP.turnOnMicrophone() != 0) {
-    return false;
-  }
-  return NDP.getAudioChunkSize() > 0;
+  PDM.onReceive(on_pdm_data);
+  PDM.setBufferSize(kPdmBufferBytes);
+  PDM.setGain(kPdmGain);
+  return PDM.begin(1, kSampleRateHz) == 1;
 }
 
 }  // namespace
 
 void setup() {
+  pinMode(LEDR, OUTPUT);
+  pinMode(LEDG, OUTPUT);
+  pinMode(LEDB, OUTPUT);
+  set_led(StatusLed::Blue);
   Serial.begin(kSerialBaud);
-  // Never call nicla::disableLDO() here, as the NDP library's own audio
-  // examples do: that LDO feeds VDDIO_EXT, which supplies the level
-  // translators on every header pin, so disabling it cuts off BB15.
-  nicla::begin();
-  nicla::leds.begin();
-  set_led(blue);
-  // Serial is a UART bridged to USB by the SAMD11, not a native USB device, so
-  // only the host needs a moment.
+  wait_for_serial();
   delay(kBootSettleMs);
 
   Serial.println();
   Serial.println(kSketchName);
   Serial.print(kLogPrefix);
-  Serial.println(" board=BB15 + Nicla Voice");
+  Serial.println(" board=BB15 + Nicla Vision");
   Serial.print(kLogPrefix);
   Serial.print(" audio=");
   Serial.print(kSampleRateHz);
@@ -934,10 +950,12 @@ void setup() {
     return;
   }
 
-  set_led(off);
+  set_led(StatusLed::Off);
   Serial.print(kLogPrefix);
-  Serial.print(" microphone_ready chunk_bytes=");
-  Serial.println(NDP.getAudioChunkSize());
+  Serial.print(" microphone_ready buffer_bytes=");
+  Serial.print(static_cast<unsigned>(PDM.getBufferSize()));
+  Serial.print(" gain=");
+  Serial.println(kPdmGain);
   Serial.print(kLogPrefix);
   Serial.println(" usb_protocol=BB15/v1 waiting_for_start_stream");
 }
@@ -951,22 +969,22 @@ void loop() {
       send_error_packet(g_setup_failure);
     }
     report_idle_state();
-    set_led(red);
+    set_led(StatusLed::Red);
     delay(50);
-    set_led(off);
+    set_led(StatusLed::Off);
     delay(450);
     return;
   }
   if (command == PacketType::StartStream) {
     reset_capture_state();
     g_streaming = true;
-    set_led(green);
+    set_led(StatusLed::Green);
     send_audio_config_packet();
     return;
   }
   if (command == PacketType::StopStream) {
     g_streaming = false;
-    set_led(off);
+    set_led(StatusLed::Off);
     return;
   }
   if (command == PacketType::RequestConfig) {
@@ -979,7 +997,7 @@ void loop() {
     return;
   }
 
-  if (!capture_fresh_chunk()) {
+  if (!capture_fresh_buffer()) {
     delay(1);
   }
 }

@@ -27,6 +27,10 @@ Vision and Arduino Nicla Voice.
   on the host, runs ten-keyword spotting on BB15, and streams the waveform, the
   features and the class scores over USB.
 
+- `bb15_nicla_vision_keyword_spotting`
+  The same keyword spotting demo driven by the Nicla Vision's onboard PDM
+  microphone instead. Both are drawn by `tools/bb15_kws_gui.py`.
+
 ## Nicla Vision Human Detection
 
 Upload `bb15_model_flasher_nicla_vision` first to install the bundled VWW
@@ -57,7 +61,7 @@ arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . ex
 arduino-cli upload --fqbn arduino:mbed_nicla:nicla_voice --port /dev/cu.usbmodem9AD4C4763 examples/bb15_nicla_voice_keyword_spotting
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Replace the port with the one your operating system assigned. This demo streams
@@ -70,3 +74,24 @@ the same environment**. See
 `bb15_nicla_voice_keyword_spotting/README.md` for why a virtual environment
 over a standalone CPython build is not enough, and for what to check when the
 board enumerates on USB but sends nothing.
+
+## Nicla Vision Keyword Spotting
+
+The same demo on the Nicla Vision, listening on that board's onboard PDM
+microphone. No flasher sketch is needed here either.
+
+```bash
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_keyword_spotting
+arduino-cli upload --fqbn arduino:mbed_nicla:nicla_vision --port /dev/cu.usbmodem101 examples/bb15_nicla_vision_keyword_spotting
+PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
+"$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem101
+```
+
+`Serial` here is native USB CDC, so there is no boot wait and the baud value is
+not load-bearing; the sketch and the tool agree on 921600 so that one command
+line serves either board. The tool reads which board answered out of the config
+packet and names it in its title and banner.
+
+See `bb15_nicla_vision_keyword_spotting/README.md` for the PDM capture path, the
+microphone gain, and what was validated on hardware.
