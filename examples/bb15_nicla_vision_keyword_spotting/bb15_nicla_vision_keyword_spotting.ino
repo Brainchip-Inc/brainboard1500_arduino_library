@@ -45,10 +45,13 @@ constexpr uint8_t kInferencePeriodBlocks = 3u;
 // Reported like any other class, but neither can trigger a detection.
 constexpr uint8_t kSilenceClass = 10u;
 constexpr uint8_t kUnknownClass = 11u;
-// Scaled with kPdmGain instead of taken from spark: the gain is a right shift
-// on every sample, so speech and the room floor move together and the gate has
-// to move by the same factor. The two constants only mean anything together.
-constexpr uint16_t kRmsThreshold = 2200u;
+// Scaled from spark's 550 by the measured noise floor rather than by kPdmGain.
+// The gain is a right shift on every sample, so speech rose fourfold with it,
+// but the floor only rose about 2.2 times, 293 to 650, because roughly 250 of
+// those counts are fixed in the board rather than acoustic. Twice spark's value
+// is the scaling the room supports; four times was set for noise that never
+// arrived, and it clipped the onset off every word.
+constexpr uint16_t kRmsThreshold = 1100u;
 constexpr uint16_t kSpeechActiveTimeMs = 1300u;
 constexpr uint16_t kSmoothingAlphaQ15 = 22938u;
 constexpr uint16_t kScoreThresholdQ15 = 16384u;

@@ -263,7 +263,7 @@ Nicla Voice keyword spotting, as of September 2, 2026:
   `unknown` and triggers nothing, and a spoken keyword triggers a detection and
   is named
 
-Nicla Vision keyword spotting, as of September 11, 2026:
+Nicla Vision keyword spotting, as of September 13, 2026:
 
 - the example compiles for `arduino:mbed_nicla:nicla_vision` and has been
   hardware-validated end to end on a Nicla Vision with BB15 attached
@@ -272,14 +272,23 @@ Nicla Vision keyword spotting, as of September 11, 2026:
   loads from host memory, and inference returns results. Stepping down to the
   Nicla Voice demo's 8 MHz was not needed
 - the microphone runs at `kPdmGain` 12 against a speech gate of `kRmsThreshold`
-  2200. The two were measured together on the shipping firmware: over a quiet
-  minute the 1000 blocks ran from 608 to 2161, median 1012, and none opened the
-  gate, but the loudest came within 39 counts of it, 1.77 percent, so the gate
-  held by a narrow margin rather than comfortably and a noisier room will open
-  it. Spoken keywords peaked at a block RMS of 5500 to 9100 per utterance,
-  median 6900, with no utterance saturating. The quiet floor belongs to the room
-  rather than the board: an earlier session in the same room measured it about
-  three times lower
+  1100. The gate is scaled from spark's 550 by the measured noise floor rather
+  than by the gain: four times the gain gave four times the speech level but
+  only 2.2 times the floor, 293 to 650 in back-to-back quiet captures, because
+  about 250 of those counts are fixed in the board rather than acoustic. Halving
+  the gate from 2200 to 1100 at that gain, measured on the board against the
+  same played audio, took correct detections from 55 to 103 of 227 utterances,
+  and from 0 of 72 to 14 of 72 at the quieter level measured, roughly what a
+  talker seated back from the desk reads. The reach is paid for in noise
+  rejection: at 1100 the MFCC front end ran on 17 to 73 percent of a quiet room
+  depending on the hour, against 4 to 25 percent at 2200 across the same
+  captures
+- levels in the room it was tuned in: spoken keywords peak at a block RMS of
+  5500 to 9100 per utterance at arm's length, median 6900, with no utterance
+  saturating, and a talker seated back from the desk reads a median peak of
+  3310. The quiet floor belongs to the room and the moment rather than to the
+  board: three sessions in that one room measured quiet-minute medians of 291,
+  650 and 1012
 - the PDM capture path is continuous under load: 4750 consecutive blocks over a
   285-second stream with zero dropped buffers and no sequence gaps, at a
   measured 16.67 blocks per second, which is the cadence the block size implies
@@ -290,14 +299,17 @@ Nicla Vision keyword spotting, as of September 11, 2026:
 - resource use: 247,368 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
   of static RAM
 - the ten-keyword sweep was driven through the host's speakers, eight repeats
-  per keyword, 63 of 79 utterances detected. `left`, `no`, `on`, `right` and
-  `stop` fired on all eight, `down` on seven, `off` on six, `go` and `up` on
-  four, and `yes` on two of seven. Every failure but one was the detection not
-  firing rather than the wrong keyword being named
-- detections were confirmed with a human speaker at the microphone at this
-  setting
-- what has **not** been validated: a room other than this one, and any
-  microphone distance beyond arm's length
+  per keyword, 63 of 79 utterances detected at the earlier gate of 2200. `left`,
+  `no`, `on`, `right` and `stop` fired on all eight, `down` on seven, `off` on
+  six, `go` and `up` on four, and `yes` on two of seven. Every failure but one
+  was the detection not firing rather than the wrong keyword being named, and
+  the paired measurement above puts 1100 ahead of 2200 at every level tested
+- detections were confirmed with a human speaker at the microphone, on firmware
+  at that earlier gate. The 1100 gate ran on the board against recordings of a
+  speaker played back at it rather than against a live talker
+- what has **not** been validated: a room other than this one, any microphone
+  distance beyond arm's length, and a live talker at the shipping gate of
+  1100
 
 ## Repository Layout
 

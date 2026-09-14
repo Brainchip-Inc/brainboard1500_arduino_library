@@ -15,9 +15,10 @@ costs no RAM.
 Everything downstream of capture is the Nicla Voice demo's pipeline value for
 value: the same DC blocker, 960-sample blocks, RMS speech gate, MFCC front end,
 spectrogram ring, inference period, smoothing, debounce and chiming. The one
-exception is the speech gate's RMS threshold, which scales with this board's
-microphone gain and so is higher here; "Microphone gain" below explains why.
-Both demos speak the same USB protocol and are drawn by the same desktop tool.
+exception is the speech gate's RMS threshold, which is set from this board's
+measured noise floor and so is higher here; "Microphone gain" below explains
+why. Both demos speak the same USB protocol and are drawn by the same desktop
+tool.
 
 ## Build and run
 
@@ -95,34 +96,50 @@ attenuation of 5 that applies when `setGain()` is never called. So only every
 third step changes anything, this demo's 12 gives an attenuation of 4, and 24 or
 above gives an attenuation of 0, which is the loudest the library goes.
 
-`kPdmGain` and `kRmsThreshold` are one setting written as two constants, and
-moving either alone breaks the demo. The gain is a right shift applied to
-everything the DFSDM produces, so speech and the room floor scale together and
-the threshold has to scale by the same factor to go on sitting where it sat.
-That is where 2200 comes from: the demo's earlier gain of 8 ran spark's 550 at
-attenuation 6, and attenuation 4 is two shifts louder, so the threshold moves by
-four as well.
+`kPdmGain` and `kRmsThreshold` are one setting written as two constants, but
+they do not scale by the same factor. The gain is a right shift applied to
+everything the DFSDM produces, so speech scales with it exactly: 8 to 12 is two
+shifts, and speech got four times larger. The room did not follow. Back-to-back
+quiet captures read a median block RMS of 293 at gain 8 and 650 at gain 12, a
+factor of 2.2, because about 250 of those counts are fixed in the board rather
+than acoustic and are there whatever the gain.
 
-Measured on the validated board at 12 and 2200, speech at arm's length peaks at
-a block RMS of roughly 5500 to 9100 per utterance, median 6900. Over a quiet
-minute in the same room the 1000 blocks ran from 608 to 2161, median 1012. None
-of them opened the gate, but the loudest came within 39 counts of it, 1.77
-percent, so the gate held by a narrow margin rather than comfortably, and a
-noisier room will open it.
+The gate has to hold its ratio to the noise rather than to speech, so it scales
+with the floor. That is where 1100 comes from: twice spark's 550, matching the
+2.2 the floor actually moved. Scaling it by four to 2200 instead set the gate
+for noise that never arrived, and the cost was paid at the start of every word,
+because the demo clears the spectrogram ring whenever the gate shuts and the
+ring then has to refill from the word itself.
 
-Spark's 550 is no gate at all at this gain: the quietest of those 1000 blocks
-was 608, so every one of them cleared 550 and the gate would have stood open for
-the whole minute. An earlier session in the same room measured a floor about
-three times lower, which is worth knowing before trusting either figure. The
-floor belongs to the room and the moment rather than to the board, so
-`kRmsThreshold` is worth re-measuring wherever the demo is set up.
+Measured on the validated board at gain 12, halving the gate from 2200 to 1100
+took correct detections from 55 to 103 of 227 played utterances. At the quieter
+of the two levels measured, roughly what a talker seated back from the desk
+reads, it took them from 0 of 72 to 14 of 72; at 2200 that distance detected
+nothing at all. `down`, the word the 2200 gate clipped hardest, goes from 51
+percent of its energy admitted to 94 percent, and no keyword falls below 94.
 
-If a quieter room or a further microphone leaves the SPEECH badge dark, raise
-`kPdmGain` and scale `kRmsThreshold` with it. Lowering the threshold on its own
-lets room noise into the MFCC front end, which is what the gate exists to
-prevent. Raising the gain is not free either, since it changes the MFCC
-magnitudes fed to the model, so detections have to be re-validated on hardware
-afterwards.
+That reach is bought with noise rejection, and a reader deciding whether to
+change the number again needs both halves. At 1100 the MFCC front end ran on 17
+to 73 percent of a quiet room depending on the hour, against 4 to 25 percent at
+2200 across the same captures. Running the front end on room noise is what the
+gate exists to prevent, so 1100 trades silence for reach rather than improving
+on 2200 outright.
+
+Levels for the room this was tuned in: speech at arm's length peaks at a block
+RMS of roughly 5500 to 9100 per utterance, median 6900, and a talker seated back
+from the desk reads a median peak of 3310, about 5 dB quieter. Quiet minutes in
+that one room have measured medians of 291, 650 and 1012 across three sessions,
+three and a half times apart end to end. The floor belongs to the room and the
+moment rather than to the board, so `kRmsThreshold` is worth re-measuring
+wherever the demo is set up.
+
+If a quieter room or a further microphone leaves the SPEECH badge dark, lower
+`kRmsThreshold` before touching `kPdmGain`. The threshold is the cheaper lever,
+because the model goes on seeing the MFCC magnitudes it was validated against,
+where raising the gain changes them and costs a hardware re-validation. Raising
+the gain also stops paying: at gain 15 most utterances at arm's length reach a
+full-scale sample, and a clipped waveform produces wrong features however loud
+it is.
 
 ## Packets are built whole before they are sent
 
