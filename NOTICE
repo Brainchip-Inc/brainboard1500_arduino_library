@@ -251,11 +251,17 @@ Paths:       examples/bb15_nicla_voice_keyword_spotting/kiss_fft.c
              examples/bb15_nicla_voice_keyword_spotting/kiss_fft.h
              examples/bb15_nicla_voice_keyword_spotting/kiss_fftr.c
              examples/bb15_nicla_voice_keyword_spotting/kiss_fftr.h
+             examples/bb15_nicla_vision_keyword_spotting/kiss_fft.c
+             examples/bb15_nicla_vision_keyword_spotting/kiss_fft.h
+             examples/bb15_nicla_vision_keyword_spotting/kiss_fftr.c
+             examples/bb15_nicla_vision_keyword_spotting/kiss_fftr.h
 
              Vendored unmodified. Each of the four files is byte-for-byte
              identical to the copy under
              `source/core/common/audio/kissfft/` in BrainChip's spark
-             repository, which is where they were taken from.
+             repository, which is where they were taken from. The two
+             keyword spotting examples carry identical copies, one per
+             Arduino sketch folder.
 
 License:     BSD 3-Clause License
 
@@ -291,8 +297,11 @@ Notes:       No separate license file was added for BSD-3-Clause, unlike
 
 Paths:       examples/bb15_nicla_voice_keyword_spotting/mfcc.h
              examples/bb15_nicla_voice_keyword_spotting/mfcc.cpp
+             examples/bb15_nicla_vision_keyword_spotting/mfcc.h
+             examples/bb15_nicla_vision_keyword_spotting/mfcc.cpp
 
-             These two files are new code rather than copies. They
+             The Nicla Vision pair are identical copies of the Nicla Voice
+             pair. They are new code rather than copies of upstream. They
              reproduce, value for value, the MFCC feature extraction that
              BrainChip's spark repository carries at
              `source/core/common/audio/mfcc.c`, which is itself derived
@@ -313,12 +322,12 @@ Copyright:   Copyright (C) 2018 Arm Limited or its affiliates.
 
 
 --------------------------------------------------------------------------
-6. Files added by the Nicla Voice demo carrying no license statement
+6. Files added by the keyword spotting demos carrying no license statement
 --------------------------------------------------------------------------
 
-The Nicla Voice keyword spotting demo adds 12 tracked files. Six of them
-declare a license and are covered by sections 4 and 5 above. The other six
-carry no copyright notice, no license header, and no SPDX identifier:
+The two keyword spotting demos add 23 tracked files between them. Twelve of
+them declare a license and are covered by sections 4 and 5 above. The other
+eleven carry no copyright notice, no license header, and no SPDX identifier:
 
     examples/bb15_nicla_voice_keyword_spotting/
       bb15_nicla_voice_keyword_spotting.ino
@@ -327,12 +336,20 @@ carry no copyright notice, no license header, and no SPDX identifier:
       program.cpp
       program.h
 
+    examples/bb15_nicla_vision_keyword_spotting/
+      bb15_nicla_vision_keyword_spotting.ino
+      model_metadata.cpp
+      model_metadata.h
+      program.cpp
+      program.h
+
     tools/
-      bb15_nicla_voice_kws_gui.py
+      bb15_kws_gui.py
 
 License:     Undetermined from file contents.
 
 Notes:       `program.cpp` is a 22,112-byte embedded model array, and
              `model_metadata.cpp` names the artifact it was produced from,
              the same arrangement as the five older `examples/*/program.cpp`
-             files described in section 3.
+             files described in section 3. The Nicla Vision demo carries
+             identical copies of all four of those files.

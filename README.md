@@ -74,6 +74,9 @@ The example set is intentionally small and board-specific:
    Captures live Nicla Voice microphone audio, computes MFCC features on the
    host, runs ten-keyword spotting on BB15, and streams the waveform, the
    features and the class scores over USB CDC.
+7. `examples/bb15_nicla_vision_keyword_spotting`
+   The same keyword spotting pipeline driven by the Nicla Vision's onboard PDM
+   microphone. One desktop tool draws either board.
 
 All sketches are heavily commented and meant to be modified by users.
 
@@ -116,15 +119,15 @@ Python 3.7 or later, `pyserial`, and the system Tk package used by `tkinter`.
 
 This demo needs no flasher sketch. Its keyword model is 22,112 bytes and is
 compiled into the sketch, so it lives in nRF52832 program flash and costs no
-RAM. The Nicla Vision demo makes the opposite choice because its VWW program is
-183,884 bytes.
+RAM. The Nicla Vision human-detection demo makes the opposite choice because
+its VWW program is 183,884 bytes.
 
 ```bash
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . examples/bb15_nicla_voice_keyword_spotting
 arduino-cli upload --fqbn arduino:mbed_nicla:nicla_voice --port /dev/cu.usbmodem9AD4C4763 examples/bb15_nicla_voice_keyword_spotting
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 `PY` has to be a Python with Tk 8.6 or later, which is often not the `python3`
@@ -132,13 +135,12 @@ on your PATH; see "The Desktop Tools And Python" below.
 Replace the port with the one your operating system assigned. It recognises
 `down`, `go`, `left`, `no`, `off`, `on`, `right`, `stop`, `up` and `yes`.
 
-Three things about this demo differ from the others, and all three will look
-like faults if they are not expected:
+Three things about this demo will look like faults if they are not expected:
 
-- **It streams at 921600 baud**, not 115200. `Serial` on Nicla Voice is a UART
-  bridged to USB by the onboard SAMD11, and at 115200 one result packet takes
-  longer to drain than the NDP120's 24 ms audio chunk period, which breaks the
-  audio stream.
+- **It streams at 921600 baud**, not the 115200 the camera and flasher examples
+  use. `Serial` on Nicla Voice is a UART bridged to USB by the onboard SAMD11,
+  and at 115200 one result packet takes longer to drain than the NDP120's 24 ms
+  audio chunk period, which breaks the audio stream.
 - **The sketch needs about ten seconds after reset** before it answers
   anything, because it loads the NDP120 firmware packages from the board's QSPI
   flash first. The desktop tool retries across that window.
@@ -154,11 +156,40 @@ a 320-sample hop, a 640-point real FFT, 40 mel bins from 20 Hz to 4000 Hz, and
 49 frames of 10 coefficients, with spark's voice-activity gating, smoothing,
 threshold, debounce and chiming defaults hard-coded.
 
+### Nicla Vision Keyword Spotting
+
+The same demo on a Nicla Vision, listening on that board's onboard PDM
+microphone instead of a Nicla Voice's NDP120. Everything downstream of capture
+is identical value for value, and both boards speak the same USB protocol.
+
+```bash
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_keyword_spotting
+arduino-cli upload --fqbn arduino:mbed_nicla:nicla_vision --port /dev/cu.usbmodem101 examples/bb15_nicla_vision_keyword_spotting
+PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
+"$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem101
+```
+
+The config packet names the board, so `tools/bb15_kws_gui.py` serves either
+demo from the same command line and titles its window after whichever answered.
+
+What differs from the Nicla Voice demo:
+
+- **There is no boot wait.** No NDP120 firmware has to be loaded, so the sketch
+  answers as soon as the host opens the port.
+- **`Serial` is native USB CDC on the STM32H747**, so the baud value is not
+  load-bearing. The sketch and the tool both say 921600 anyway, so that one
+  command line works for either board.
+- **Capture is the core `PDM` library** on the STM32H747's DFSDM peripheral,
+  at 16 kHz mono into a 1024-byte double buffer. Dropped audio is counted as
+  PDM buffer overruns and reported through the same telemetry field.
+- **BB15 runs at 25 MHz SPI** here, the Nicla Vision human-detection example's
+  value, rather than the Nicla Voice demo's 8 MHz.
+
 ## The Desktop Tools And Python
 
-Both `tools/bb15_nicla_vision_preview.py` and
-`tools/bb15_nicla_voice_kws_gui.py` need one Python environment carrying **both
-Tk 8.6 or later and `pyserial`**.
+Both `tools/bb15_nicla_vision_preview.py` and `tools/bb15_kws_gui.py` need one
+Python environment carrying **both Tk 8.6 or later and `pyserial`**.
 
 Apple's system Tcl/Tk 8.5, which `/usr/bin/python3` uses on macOS, renders
 nothing: the window opens at the right size and stays blank, with no error
@@ -185,6 +216,7 @@ arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . e
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_dummy_inference_nicla_vision
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_human_detection
 arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_voice --library . examples/bb15_nicla_voice_keyword_spotting
+arduino-cli compile --clean --fqbn arduino:mbed_nicla:nicla_vision --library . examples/bb15_nicla_vision_keyword_spotting
 ```
 
 Run these sequentially. Parallel `arduino-cli` compiles can race in the shared
@@ -230,6 +262,54 @@ Nicla Voice keyword spotting, as of September 2, 2026:
 - classification behaves correctly in both directions: room noise classifies as
   `unknown` and triggers nothing, and a spoken keyword triggers a detection and
   is named
+
+Nicla Vision keyword spotting, as of September 13, 2026:
+
+- the example compiles for `arduino:mbed_nicla:nicla_vision` and has been
+  hardware-validated end to end on a Nicla Vision with BB15 attached
+- `BB15Pinout::niclaVisionDefaults()` at **25 MHz SPI** was confirmed on
+  hardware: `begin()` reports IP version `0xBCA10309`, the 22 KB keyword model
+  loads from host memory, and inference returns results. Stepping down to the
+  Nicla Voice demo's 8 MHz was not needed
+- the microphone runs at `kPdmGain` 12 against a speech gate of `kRmsThreshold`
+  1100. The gate is scaled from spark's 550 by the measured noise floor rather
+  than by the gain: four times the gain gave four times the speech level but
+  only 2.2 times the floor, 293 to 650 in back-to-back quiet captures, because
+  about 250 of those counts are fixed in the board rather than acoustic. Halving
+  the gate from 2200 to 1100 at that gain, measured on the board against the
+  same played audio, took correct detections from 55 to 103 of 227 utterances,
+  and from 0 of 72 to 14 of 72 at the quieter level measured, roughly what a
+  talker seated back from the desk reads. The reach is paid for in noise
+  rejection: at 1100 the MFCC front end ran on 17 to 73 percent of a quiet room
+  depending on the hour, against 4 to 25 percent at 2200 across the same
+  captures
+- levels in the room it was tuned in: spoken keywords peak at a block RMS of
+  5500 to 9100 per utterance at arm's length, median 6900, with no utterance
+  saturating, and a talker seated back from the desk reads a median peak of
+  3310. The quiet floor belongs to the room and the moment rather than to the
+  board: three sessions in that one room measured quiet-minute medians of 291,
+  650 and 1012
+- the PDM capture path is continuous under load: 4750 consecutive blocks over a
+  285-second stream with zero dropped buffers and no sequence gaps, at a
+  measured 16.67 blocks per second, which is the cadence the block size implies
+- the link survives being picked up and dropped repeatedly: 37 connect and
+  disconnect cycles with the desktop tool, every one of which streamed
+- timings measured on device: under 1 ms per 60 ms block for the three MFCC
+  frames, and 2 ms per inference
+- resource use: 247,368 of 1,966,080 bytes of flash and 83,176 of 523,624 bytes
+  of static RAM
+- the ten-keyword sweep was driven through the host's speakers, eight repeats
+  per keyword, 63 of 79 utterances detected at the earlier gate of 2200. `left`,
+  `no`, `on`, `right` and `stop` fired on all eight, `down` on seven, `off` on
+  six, `go` and `up` on four, and `yes` on two of seven. Every failure but one
+  was the detection not firing rather than the wrong keyword being named, and
+  the paired measurement above puts 1100 ahead of 2200 at every level tested
+- detections were confirmed with a human speaker at the microphone, on firmware
+  at that earlier gate. The 1100 gate ran on the board against recordings of a
+  speaker played back at it rather than against a live talker
+- what has **not** been validated: a room other than this one, any microphone
+  distance beyond arm's length, and a live talker at the shipping gate of
+  1100
 
 ## Repository Layout
 

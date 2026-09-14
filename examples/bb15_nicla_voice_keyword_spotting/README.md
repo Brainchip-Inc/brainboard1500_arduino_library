@@ -28,7 +28,7 @@ below explains why and how to check:
 ```bash
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Replace the port with the one your operating system assigned. Read that section
@@ -39,11 +39,12 @@ than an error.
 It loads 516 KB of NDP120 firmware packages from the board's QSPI flash first.
 The tool retries across that window and shows `CONNECTING` while it waits.
 
-The USB link runs at **921600 baud**, not the 115200 the other examples use.
-`Serial` on this board is a UART bridged to USB by the onboard SAMD11, and at
-115200 one result packet takes 37 ms to drain, longer than the NDP120's 24 ms
-audio chunk period, which breaks the audio stream. The sketch and the tool both
-default to 921600; do not attach a text serial monitor while streaming.
+The USB link runs at **921600 baud**, not the 115200 the camera and flasher
+examples use. `Serial` on this board is a UART bridged to USB by the onboard
+SAMD11, and at 115200 one result packet takes 37 ms to drain, longer than the
+NDP120's 24 ms audio chunk period, which breaks the audio stream. The sketch
+and the tool both default to 921600; do not attach a text serial monitor while
+streaming.
 
 ## What runs where
 
@@ -116,7 +117,7 @@ scripts:
 ```bash
 PY=/path/to/a/python/with/tk/8.6/or/later/bin/python3
 "$PY" -m pip install --target ~/.kws-libs -r tools/requirements.txt
-PYTHONPATH=~/.kws-libs "$PY" tools/bb15_nicla_voice_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
+PYTHONPATH=~/.kws-libs "$PY" tools/bb15_kws_gui.py --port /dev/cu.usbmodem9AD4C4763
 ```
 
 Installing straight into the interpreter also works, but only if that

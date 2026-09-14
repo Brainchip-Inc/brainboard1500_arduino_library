@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Live USB preview for `bb15_nicla_vision_human_detection`.
 
 Requirements:
@@ -17,10 +16,8 @@ import sys
 import time
 import tkinter as tk
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import serial
-
 
 MAGIC = b"BB15"
 VERSION = 1
@@ -65,7 +62,9 @@ class FrameResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", required=True, help="Serial device, e.g. /dev/ttyACM0")
+    parser.add_argument(
+        "--port", required=True, help="Serial device, e.g. /dev/ttyACM0"
+    )
     parser.add_argument("--baud", type=int, default=115200, help="USB CDC baud setting")
     return parser.parse_args()
 
@@ -80,7 +79,7 @@ def read_exact(port: serial.Serial, count: int) -> bytes:
     return bytes(data)
 
 
-def read_packet(port: serial.Serial) -> Tuple[int, bytes]:
+def read_packet(port: serial.Serial) -> tuple[int, bytes]:
     """Scan through any boot text until a complete framed protocol message."""
     window = bytearray()
     while True:
@@ -140,7 +139,9 @@ def parse_frame_result(payload: bytes) -> FrameResult:
     if pixel_format != PIXEL_FORMAT_GRAY8:
         raise ValueError(f"unsupported preview pixel format: {pixel_format}")
     if len(pixels) != width * height:
-        raise ValueError(f"invalid grayscale payload: {len(pixels)} bytes for {width}x{height}")
+        raise ValueError(
+            f"invalid grayscale payload: {len(pixels)} bytes for {width}x{height}"
+        )
     return FrameResult(
         sequence,
         width,
@@ -174,7 +175,7 @@ def ppm(frame: FrameResult) -> bytes:
     return header + frame.pixels
 
 
-def connect(port_name: str, baud: int) -> Tuple[serial.Serial, CameraConfig]:
+def connect(port_name: str, baud: int) -> tuple[serial.Serial, CameraConfig]:
     port = serial.Serial(port_name, baud, timeout=3.0)
     # Opening USB CDC often resets the board. Let it print its boot banner,
     # then remove that text before negotiating the binary stream protocol.
@@ -279,7 +280,7 @@ def main() -> int:
         running = False
 
     root.protocol("WM_DELETE_WINDOW", close_window)
-    port: Optional[serial.Serial] = None
+    port: serial.Serial | None = None
     stream_started = False
     frame_count = 0
     last_frame_at = time.monotonic()
@@ -312,7 +313,12 @@ def main() -> int:
                 if message_type != MESSAGE_FRAME_RESULT:
                     continue
                 frame = parse_frame_result(payload)
-            except (serial.SerialException, TimeoutError, ValueError, RuntimeError) as exc:
+            except (
+                serial.SerialException,
+                TimeoutError,
+                ValueError,
+                RuntimeError,
+            ) as exc:
                 status_label.configure(text=f"Reconnecting: {exc}")
                 result_title.configure(text="CONNECTION LOST", fg="#a84038")
                 prediction_label.configure(text="Trying to reconnect", fg="#a84038")
@@ -332,7 +338,9 @@ def main() -> int:
             image = tk.PhotoImage(data=ppm(frame), format="PPM")
             available_width = max(frame.width, root.winfo_width() - 20)
             available_height = max(frame.height, root.winfo_height() - 70)
-            scale = max(1, min(available_width // frame.width, available_height // frame.height))
+            scale = max(
+                1, min(available_width // frame.width, available_height // frame.height)
+            )
             if scale > 1:
                 image = image.zoom(scale, scale)
             image_label.configure(image=image)
@@ -351,7 +359,9 @@ def main() -> int:
                 text=label_for_prediction(frame.predicted_index),
                 fg="#14765d" if is_person else "#1f2d35",
             )
-            score_label.configure(text=f"Scores  no person {frame.score0}   person {frame.score1}")
+            score_label.configure(
+                text=f"Scores  no person {frame.score0}   person {frame.score1}"
+            )
             status = (
                 f"Frame {frame.sequence}  |  Capture {frame.grab_ms} ms  |  "
                 f"Preprocess {frame.prep_ms} ms  |  Inference {frame.infer_ms} ms  |  "
