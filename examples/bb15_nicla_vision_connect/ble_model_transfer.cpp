@@ -7,25 +7,30 @@
 #include <string.h>
 
 #include <memory>
+#include <utility>
 
 namespace model {
 namespace {
 
-// One slot per application in the BrainBoard's 8 MB external model window.
-// Only the keyword slot is used today; a second application takes the next
-// slot without disturbing this one.
+// One slot per application in the BrainBoard's external model window. Only the
+// keyword slot is used today; a second application takes the next slot without
+// disturbing this one.
 constexpr uint32_t kModelSlotBytes = 0x80000u;
 constexpr uint32_t kKeywordSlotOffset = 0u;
 
 // The slot opens with one flash sector describing what follows, so the record
 // sits at a fixed address and the model data stays sector aligned behind it.
-constexpr uint32_t kRecordBytes = 4096u;
-constexpr uint8_t kRecordVersion = 1u;
+constexpr uint32_t kRecordBytes = kBB15ExternalFlashSectorBytes;
+constexpr uint8_t kRecordVersion = 2u;
 
-// A FlatBuffers size prefix is four bytes, and the smallest serialized
-// program is two prefixed buffers, so anything shorter is not one.
+// How much of a model the board takes before it commits it, which is what it
+// reports to the phone. The flash erases a sector at a time, so a sector is
+// both the least the board can commit and all of a model it has to hold.
+constexpr uint32_t kBlockBytes = kBB15ExternalFlashSectorBytes;
+
+// A FlatBuffers buffer opens with a four byte size prefix, and a program info
+// blob is one such buffer and nothing else.
 constexpr size_t kSizePrefixBytes = 4u;
-constexpr size_t kMinProgramBytes = 2u * kSizePrefixBytes;
 
 // Fields the phone folds into its combined CRC, in its order: total length,
 // three input dimensions, three output dimensions, flash address, edge flag,
@@ -34,22 +39,41 @@ constexpr size_t kMinProgramBytes = 2u * kSizePrefixBytes;
 constexpr size_t kCrcHeaderFields = 15u;
 constexpr size_t kCrcHeaderBytes = kCrcHeaderFields * 4u + kMaxNameLength;
 
+constexpr uint8_t kControlStart = 0x01u;
+constexpr uint8_t kControlAbort = 0x02u;
+constexpr size_t kStartFrameBytes = 6u;
+
 constexpr uint8_t kTransferInfo = 0x00u;
+constexpr uint8_t kTransferData = 0x01u;
 
-constexpr uint8_t kAckEraseDone = 0xEEu;
-constexpr uint8_t kAckWriteDone = 0xCCu;
-constexpr uint8_t kAckCrcFail = 0xBBu;
+constexpr uint8_t kResultOk = 0x00u;
+constexpr uint8_t kResultDone = 0x01u;
+constexpr uint8_t kResultErrOffset = 0x02u;
+constexpr uint8_t kResultErrIntegrity = 0x03u;
+constexpr uint8_t kResultErrFlash = 0x04u;
+constexpr uint8_t kResultErrState = 0x05u;
+constexpr uint8_t kResultErrParam = 0x06u;
+constexpr uint8_t kResultAborted = 0x07u;
+constexpr uint8_t kResultReady = 0x08u;
+constexpr uint8_t kResultErrProgram = 0x09u;
 
-constexpr size_t kMaxChunkBytes = 244u;
+// Not a result code, and never sent: it marks that no status is waiting.
+constexpr uint8_t kResultNone = 0xFFu;
+
+// A status notification is always this long, and every write of model bytes
+// opens with the absolute offset in the file of the bytes behind it.
+constexpr size_t kStatusBytes = 14u;
+constexpr size_t kOffsetBytes = 4u;
+
+constexpr size_t kMaxDataWriteBytes = 244u;
 constexpr size_t kMaxShapeDimensions = 3u;
 
 constexpr const char* kLogPrefix = "[bb15_nicla_vision_connect]";
 
 // The low byte of each characteristic UUID, which is how a write is routed.
-constexpr uint8_t kCodeFileTransfer = 0x01u;
-constexpr uint8_t kCodeFileSize = 0x04u;
+constexpr uint8_t kCodeData = 0x01u;
+constexpr uint8_t kCodeControl = 0x03u;
 constexpr uint8_t kCodeFileCrc = 0x06u;
-constexpr uint8_t kCodeTransferType = 0x07u;
 constexpr uint8_t kCodeInputShape = 0x08u;
 constexpr uint8_t kCodeOutputShape = 0x09u;
 constexpr uint8_t kCodeFlashAddress = 0x0Au;
@@ -63,18 +87,17 @@ constexpr uint8_t kCodeUnknownClass = 0x11u;
 constexpr uint8_t kCodeInferenceMode = 0x12u;
 
 BLEService g_service("f000aa00-0451-4000-b000-000000000000");
-BLECharacteristic g_file_transfer("f000aa01-0451-4000-b000-000000000000",
-                                  BLEWrite | BLEWriteWithoutResponse,
-                                  kMaxChunkBytes);
-BLECharacteristic g_ack("f000aa02-0451-4000-b000-000000000000", BLENotify, 1);
-BLECharacteristic g_file_size("f000aa04-0451-4000-b000-000000000000", BLEWrite,
-                              4);
+BLECharacteristic g_data("f000aa01-0451-4000-b000-000000000000",
+                         BLEWrite | BLEWriteWithoutResponse,
+                         kMaxDataWriteBytes);
+BLECharacteristic g_status("f000aa02-0451-4000-b000-000000000000", BLENotify,
+                           kStatusBytes);
+BLECharacteristic g_control("f000aa03-0451-4000-b000-000000000000", BLEWrite,
+                            kStartFrameBytes);
 BLECharacteristic g_app_index("f000aa05-0451-4000-b000-000000000000", BLEWrite,
                               1);
 BLECharacteristic g_file_crc("f000aa06-0451-4000-b000-000000000000", BLEWrite,
                              4);
-BLECharacteristic g_transfer_type("f000aa07-0451-4000-b000-000000000000",
-                                  BLEWrite, 1);
 BLECharacteristic g_input_shape("f000aa08-0451-4000-b000-000000000000",
                                 BLEWrite, 12);
 BLECharacteristic g_output_shape("f000aa09-0451-4000-b000-000000000000",
@@ -106,28 +129,26 @@ struct __attribute__((packed)) Record {
   uint32_t infoLength;
   uint32_t dataLength;
   uint32_t dataCrc32;
-  uint32_t inputShape[kMaxShapeDimensions];
+  uint32_t dataAddress;
+  uint8_t dataFirstBytes[4];
   uint32_t outputShape[kMaxShapeDimensions];
-  uint32_t isEdgeLearned;
-  uint32_t numEdgeClasses;
   uint32_t mfccFsBits;
   uint32_t silenceClass;
   uint32_t unknownClass;
-  uint32_t inferenceMode;
   char name[kMaxNameLength];
 };
 
 /** @brief Room left in the record sector for the program info half. */
 constexpr size_t kMaxInfoBytes = kRecordBytes - sizeof(Record);
 
-/** @brief What the phone has told us about the transfer in flight. */
-struct Incoming {
+/** @brief What the phone has told us about the model it is sending. */
+struct Session {
+  uint32_t totalLength = 0u;
   uint32_t infoLength = 0u;
   uint32_t dataLength = 0u;
-  uint32_t totalLength = 0u;
-  uint32_t combinedCrc32 = 0u;
+  uint32_t infoCrc32 = 0u;
   uint32_t dataCrc32 = 0u;
-  uint32_t flashAddress = 0u;
+  uint32_t flashOffset = 0u;
   uint32_t inputShape[kMaxShapeDimensions] = {0u, 0u, 0u};
   uint32_t outputShape[kMaxShapeDimensions] = {0u, 0u, 0u};
   uint32_t isEdgeLearned = 0u;
@@ -137,9 +158,26 @@ struct Incoming {
   uint32_t unknownClass = 0u;
   uint32_t inferenceMode = 0u;
   char name[kMaxNameLength] = {0};
-  uint8_t phase = kTransferInfo;
-  uint32_t received = 0u;
+  bool flashOffsetSet = false;
   bool active = false;
+};
+
+/** @brief Where one half of the model has got to. */
+struct Transfer {
+  bool active = false;
+  uint8_t type = kTransferInfo;
+  uint32_t total = 0u;
+  uint32_t position = 0u;
+  uint32_t staged = 0u;
+  uint32_t crc32 = 0u;
+};
+
+/** @brief Work a Bluetooth write has queued for poll() to carry out. */
+enum class Work {
+  None,
+  ArmDataTransfer,
+  CommitBlock,
+  InstallModel,
 };
 
 BB15* g_board = nullptr;
@@ -147,16 +185,25 @@ BB15Runner* g_runner = nullptr;
 LoadedHandler g_on_loaded = nullptr;
 ActivityHandler g_on_activity = nullptr;
 
-Incoming g_incoming;
-// Holds [info][record][data] while a transfer runs, then is released.
-std::unique_ptr<uint8_t[]> g_staging;
-// Holds the whole serialized program for as long as the model stays loaded,
-// because the runtime keeps the pointer it was loaded from.
-std::unique_ptr<uint8_t[]> g_program;
+Session g_session;
+Transfer g_transfer;
+Record g_record = {};
+
+// One block of the model in flight, held only until it reaches flash.
+std::unique_ptr<uint8_t[]> g_block;
+// The program info the phone has sent but whose model is not installed yet.
+std::unique_ptr<uint8_t[]> g_incoming_info;
+// The program info of the model the engine is running. The engine keeps a
+// pointer to it, so it outlives every later transfer until one replaces it.
+std::unique_ptr<uint8_t[]> g_loaded_info;
 Loaded g_loaded;
 
-uint8_t g_pending_ack = 0u;
-bool g_install_pending = false;
+// The CRC the phone last wrote, which belongs to whichever half starts next.
+uint32_t g_pending_crc32 = 0u;
+
+Work g_work = Work::None;
+uint8_t g_pending_result = kResultNone;
+uint32_t g_pending_position = 0u;
 
 /**
  * @brief The CRC32 the phone sends, which is not the usual one.
@@ -189,6 +236,33 @@ uint32_t crc32Update(uint32_t crc, const uint8_t* bytes, size_t count) {
 }
 
 /**
+ * @brief Holds the BrainBoard's flash bridge for as long as it is in scope.
+ *
+ * Writing the model flash goes through the AKD1500's SPI feedthrough, which
+ * has to be taken over and given back, and the engine cannot run until it is
+ * back. Pairing the two here keeps a failure part way through a block from
+ * leaving the bridge held.
+ */
+class BridgeHold {
+ public:
+  explicit BridgeHold(BB15& board) : board_(board), held_(board.s2mEnter()) {}
+  ~BridgeHold() {
+    if (held_) {
+      board_.s2mExit();
+    }
+  }
+
+  BridgeHold(const BridgeHold&) = delete;
+  BridgeHold& operator=(const BridgeHold&) = delete;
+
+  bool held() const { return held_; }
+
+ private:
+  BB15& board_;
+  bool held_;
+};
+
+/**
  * @brief Identify a characteristic of this service by its UUID.
  *
  * Every UUID in the service is f000aaXX-0451-4000-b000-000000000000, so the
@@ -208,6 +282,34 @@ uint8_t characteristicCode(const BLECharacteristic& characteristic) {
 }
 
 /**
+ * @brief Read a little-endian unsigned 32-bit value out of a buffer.
+ *
+ * @param bytes   Buffer holding at least four bytes at `offset`.
+ * @param offset  Where to read from.
+ * @return The value.
+ */
+uint32_t readU32At(const uint8_t* bytes, size_t offset) {
+  return static_cast<uint32_t>(bytes[offset]) |
+         (static_cast<uint32_t>(bytes[offset + 1u]) << 8) |
+         (static_cast<uint32_t>(bytes[offset + 2u]) << 16) |
+         (static_cast<uint32_t>(bytes[offset + 3u]) << 24);
+}
+
+/**
+ * @brief Write a little-endian unsigned 32-bit value into a buffer.
+ *
+ * @param bytes   Buffer with room for four bytes at `offset`.
+ * @param offset  Where to write.
+ * @param value   Value to write.
+ */
+void writeU32At(uint8_t* bytes, size_t offset, uint32_t value) {
+  bytes[offset] = static_cast<uint8_t>(value & 0xFFu);
+  bytes[offset + 1u] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+  bytes[offset + 2u] = static_cast<uint8_t>((value >> 16) & 0xFFu);
+  bytes[offset + 3u] = static_cast<uint8_t>((value >> 24) & 0xFFu);
+}
+
+/**
  * @brief Read a little-endian unsigned 32-bit value from a characteristic.
  *
  * @param characteristic  Characteristic the phone has just written.
@@ -217,11 +319,7 @@ uint32_t readU32(const BLECharacteristic& characteristic) {
   if (characteristic.valueLength() < 4) {
     return 0u;
   }
-  const uint8_t* bytes = characteristic.value();
-  return static_cast<uint32_t>(bytes[0]) |
-         (static_cast<uint32_t>(bytes[1]) << 8) |
-         (static_cast<uint32_t>(bytes[2]) << 16) |
-         (static_cast<uint32_t>(bytes[3]) << 24);
+  return readU32At(characteristic.value(), 0u);
 }
 
 /**
@@ -234,14 +332,7 @@ void readShape(const BLECharacteristic& characteristic, uint32_t* out) {
   const uint8_t* bytes = characteristic.value();
   const size_t count = static_cast<size_t>(characteristic.valueLength()) / 4u;
   for (size_t index = 0u; index < kMaxShapeDimensions; ++index) {
-    if (index < count) {
-      out[index] = static_cast<uint32_t>(bytes[index * 4u]) |
-                   (static_cast<uint32_t>(bytes[index * 4u + 1u]) << 8) |
-                   (static_cast<uint32_t>(bytes[index * 4u + 2u]) << 16) |
-                   (static_cast<uint32_t>(bytes[index * 4u + 3u]) << 24);
-    } else {
-      out[index] = 0u;
-    }
+    out[index] = index < count ? readU32At(bytes, index * 4u) : 0u;
   }
 }
 
@@ -266,401 +357,13 @@ uint32_t recordAddress() {
   return AkidaNicla::externalModelAddressFromOffset(kKeywordSlotOffset);
 }
 
-/** @brief Address the model data is written to and loaded from. */
-uint32_t modelDataAddress() {
+/** @brief Address the model data of the transfer in flight is written to. */
+uint32_t transferDataAddress() {
   return AkidaNicla::externalModelAddressFromOffset(kKeywordSlotOffset +
-                                                    kRecordBytes);
+                                                    g_session.flashOffset);
 }
 
-/** @brief Start of the program info inside the staging buffer. */
-uint8_t* stagingInfo() { return g_staging.get(); }
-
-/** @brief Start of the record inside the staging buffer. */
-uint8_t* stagingRecord() { return g_staging.get() + g_incoming.infoLength; }
-
-/** @brief Start of the model data inside the staging buffer. */
-uint8_t* stagingData() {
-  return g_staging.get() + g_incoming.infoLength + kRecordBytes;
-}
-
-/**
- * @brief Recompute the CRC the phone sent with the info file.
- *
- * The phone runs it over a header built from the fields it wrote to the
- * metadata characteristics, followed by the info bytes, so the same header has
- * to be rebuilt here to check it. The model name is the last segment of the
- * filesystem path the phone wrote, which is how it derives the name too.
- *
- * @return The CRC of the header and the received info bytes.
- */
-uint32_t computeCombinedCrc32() {
-  uint8_t header[kCrcHeaderBytes];
-  memset(header, 0, sizeof(header));
-
-  const uint32_t fields[kCrcHeaderFields] = {
-      g_incoming.totalLength,    g_incoming.inputShape[0],
-      g_incoming.inputShape[1],  g_incoming.inputShape[2],
-      g_incoming.outputShape[0], g_incoming.outputShape[1],
-      g_incoming.outputShape[2], g_incoming.flashAddress,
-      g_incoming.isEdgeLearned,  g_incoming.numEdgeClasses,
-      g_incoming.infoLength,     g_incoming.mfccFsBits,
-      g_incoming.silenceClass,   g_incoming.unknownClass,
-      g_incoming.inferenceMode};
-  for (size_t index = 0u; index < kCrcHeaderFields; ++index) {
-    header[index * 4u] = static_cast<uint8_t>(fields[index] & 0xFFu);
-    header[index * 4u + 1u] =
-        static_cast<uint8_t>((fields[index] >> 8) & 0xFFu);
-    header[index * 4u + 2u] =
-        static_cast<uint8_t>((fields[index] >> 16) & 0xFFu);
-    header[index * 4u + 3u] =
-        static_cast<uint8_t>((fields[index] >> 24) & 0xFFu);
-  }
-  memcpy(&header[kCrcHeaderFields * 4u], g_incoming.name,
-         strnlen(g_incoming.name, kMaxNameLength));
-
-  const uint32_t crc = crc32Update(0u, header, sizeof(header));
-  return crc32Update(crc, stagingInfo(), g_incoming.infoLength);
-}
-
-/** @brief Abandon the transfer in flight and release its buffer. */
-void abandonTransfer() {
-  g_staging.reset();
-  g_incoming = Incoming();
-  if (g_on_activity != nullptr) {
-    g_on_activity(false);
-  }
-}
-
-/**
- * @brief Fill in the record that opens the slot.
- *
- * @param record  Receives the description of the model being installed.
- */
-void fillRecord(Record* record) {
-  memset(record, 0, sizeof(Record));
-  memcpy(record->magic, "BB15", 4);
-  record->version = kRecordVersion;
-  record->infoLength = g_incoming.infoLength;
-  record->dataLength = g_incoming.dataLength;
-  record->dataCrc32 = g_incoming.dataCrc32;
-  memcpy(record->inputShape, g_incoming.inputShape, sizeof(record->inputShape));
-  memcpy(record->outputShape, g_incoming.outputShape,
-         sizeof(record->outputShape));
-  record->isEdgeLearned = g_incoming.isEdgeLearned;
-  record->numEdgeClasses = g_incoming.numEdgeClasses;
-  record->mfccFsBits = g_incoming.mfccFsBits;
-  record->silenceClass = g_incoming.silenceClass;
-  record->unknownClass = g_incoming.unknownClass;
-  record->inferenceMode = g_incoming.inferenceMode;
-  memcpy(record->name, g_incoming.name, kMaxNameLength);
-
-  const uint8_t* covered =
-      reinterpret_cast<const uint8_t*>(&record->infoLength);
-  const size_t coveredBytes = sizeof(Record) - offsetof(Record, infoLength);
-  record->recordCrc32 = crc32Update(0u, covered, coveredBytes);
-}
-
-/**
- * @brief Turn a record and its info blob into the loaded-model description.
- *
- * @param record       Record read from flash or just built.
- * @param program  The serialized program, which must outlive the loaded model.
- * @return The description of the model.
- */
-Loaded describe(const Record& record, const uint8_t* program) {
-  Loaded described;
-  described.program = program;
-  described.programBytes = record.infoLength + record.dataLength;
-  described.dataBytes = record.dataLength;
-  described.classCount = static_cast<uint8_t>(shapeVolume(record.outputShape));
-  described.silenceClass = static_cast<uint8_t>(record.silenceClass);
-  described.unknownClass = static_cast<uint8_t>(record.unknownClass);
-  described.edgeLearning = record.isEdgeLearned != 0u;
-  described.edgeClasses =
-      static_cast<uint16_t>(record.numEdgeClasses & 0xFFFFu);
-  described.neuronsPerClass =
-      static_cast<uint16_t>((record.numEdgeClasses >> 16) & 0xFFFFu);
-  memcpy(&described.mfccFullScale, &record.mfccFsBits, sizeof(float));
-  memcpy(described.name, record.name, kMaxNameLength);
-  described.name[kMaxNameLength - 1u] = '\0';
-  described.valid = true;
-  return described;
-}
-
-/**
- * @brief Read a little-endian unsigned 32-bit value out of a buffer.
- *
- * @param bytes  Buffer holding at least four bytes at `offset`.
- * @param offset Where to read from.
- * @return The value.
- */
-uint32_t readU32At(const uint8_t* bytes, size_t offset) {
-  return static_cast<uint32_t>(bytes[offset]) |
-         (static_cast<uint32_t>(bytes[offset + 1u]) << 8) |
-         (static_cast<uint32_t>(bytes[offset + 2u]) << 16) |
-         (static_cast<uint32_t>(bytes[offset + 3u]) << 24);
-}
-
-/**
- * @brief Say whether a buffer is a serialized program this engine can load.
- *
- * Everything here arrives over Bluetooth, and the engine does not reject a
- * malformed or foreign program: it calls panic(), which halts the core and
- * takes USB down with it, leaving the board recoverable only with the reset
- * button. So the same things the engine would panic over are checked here
- * first, where a refusal can be reported instead.
- *
- * A serialized program is a size-prefixed program info followed by a
- * size-prefixed program, and the two lengths must account for the whole
- * buffer. The engine also refuses a program built for another Akida version,
- * so the version string it expects has to appear in the info.
- *
- * @param program  Whole serialized program.
- * @param bytes    Its length.
- * @return True when it is safe to hand to the engine.
- */
-bool programAcceptable(const uint8_t* program, size_t bytes) {
-  if (program == nullptr || bytes < kMinProgramBytes) {
-    return false;
-  }
-  const size_t infoBytes = readU32At(program, 0u) + kSizePrefixBytes;
-  if (infoBytes < kSizePrefixBytes || infoBytes > bytes - kSizePrefixBytes) {
-    return false;
-  }
-  const size_t dataBytes = readU32At(program, infoBytes) + kSizePrefixBytes;
-  if (infoBytes + dataBytes != bytes) {
-    return false;
-  }
-
-  // The version is a null-terminated string inside the info flatbuffer, so it
-  // is looked for rather than parsed: a wrong one must not reach the engine.
-  const char* expected = akida::version();
-  const size_t expectedBytes = strlen(expected) + 1u;
-  if (expectedBytes > infoBytes) {
-    return false;
-  }
-  for (size_t start = 0u; start + expectedBytes <= infoBytes; ++start) {
-    if (memcmp(program + start, expected, expectedBytes) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * @brief Load a serialized program whose data half is in BrainBoard flash.
- *
- * @param program  Whole serialized program, which the runtime keeps a pointer
- *                 to for as long as the model stays loaded.
- * @param bytes    Its length.
- * @return True when the runner accepted it.
- */
-bool loadFromFlash(const uint8_t* program, size_t bytes) {
-  BB15Model model(program, bytes);
-  model.setStorage(BB15ModelStorage::ExternalFlash)
-      .setExternalAddress(modelDataAddress());
-  return g_runner->loadModel(model) == BB15Status::Ok;
-}
-
-/**
- * @brief Rebuild the installed model out of BrainBoard flash and load it.
- *
- * The slot holds a record describing the model followed by the data half of
- * the serialized program; the info half lives inside the record. The whole
- * program is reassembled here because the engine needs both halves to parse
- * it, and it is validated before the engine is allowed near it.
- *
- * @return True when a model was found, accepted and loaded.
- */
-/**
- * @brief Read the installed model out of the slot, through the SPI bridge.
- *
- * The bridge has to be taken over for the read: the memory mapped path the
- * board uses otherwise is not up on a cold boot, and the read simply fails.
- *
- * @param record   Receives the record that opens the slot.
- * @param program  Receives the reassembled serialized program.
- * @return True when a plausible record and its program were read.
- */
-bool readInstalledProgram(Record* record, std::unique_ptr<uint8_t[]>* program) {
-  if (!g_board->detectFlash() || !g_board->s2mEnter()) {
-    return false;
-  }
-
-  std::unique_ptr<uint8_t[]> sector(new uint8_t[kRecordBytes]);
-  bool ok =
-      g_board->readExternalData(recordAddress(), sector.get(), kRecordBytes);
-  if (ok) {
-    memcpy(record, sector.get(), sizeof(Record));
-    ok = memcmp(record->magic, "BB15", 4) == 0 &&
-         record->version == kRecordVersion &&
-         record->infoLength >= kMinProgramBytes &&
-         record->infoLength <= kMaxInfoBytes && record->dataLength > 0u &&
-         record->dataLength <= kModelSlotBytes - kRecordBytes;
-  }
-
-  if (ok) {
-    const uint8_t* covered =
-        reinterpret_cast<const uint8_t*>(&record->infoLength);
-    const size_t coveredBytes = sizeof(Record) - offsetof(Record, infoLength);
-    ok = crc32Update(0u, covered, coveredBytes) == record->recordCrc32;
-  }
-
-  if (ok) {
-    program->reset(new uint8_t[record->infoLength + record->dataLength]);
-    memcpy(program->get(), sector.get() + sizeof(Record), record->infoLength);
-    ok = g_board->readExternalData(modelDataAddress(),
-                                   program->get() + record->infoLength,
-                                   record->dataLength);
-  }
-
-  g_board->s2mExit();
-  return ok;
-}
-
-/**
- * @brief Load whatever model the slot holds.
- *
- * The program is validated before the engine is allowed near it, because the
- * engine answers a malformed or foreign one by halting the core.
- *
- * @return True when a model was found, accepted and loaded.
- */
-bool loadInstalledModel() {
-  Record record;
-  std::unique_ptr<uint8_t[]> program;
-  if (!readInstalledProgram(&record, &program)) {
-    return false;
-  }
-
-  const size_t programBytes = record.infoLength + record.dataLength;
-  if (!programAcceptable(program.get(), programBytes)) {
-    Serial.print(kLogPrefix);
-    Serial.println(" model refused: not a program this engine can load");
-    return false;
-  }
-  if (!loadFromFlash(program.get(), programBytes)) {
-    return false;
-  }
-
-  g_program = std::move(program);
-  g_loaded = describe(record, g_program.get());
-  return true;
-}
-
-/**
- * @brief Write the staged model to flash and load it.
- *
- * The staging buffer is laid out as program info, record, data so that one
- * write installs the slot: the library writes everything past the program
- * info, which is exactly the record followed by the data.
- *
- * @return True when the model was written and loaded.
- */
-bool installStagedModel() {
-  Record record;
-  fillRecord(&record);
-  memcpy(stagingRecord(), &record, sizeof(Record));
-  memset(stagingRecord() + sizeof(Record), 0xFF, kRecordBytes - sizeof(Record));
-  memcpy(stagingRecord() + sizeof(Record), stagingInfo(),
-         g_incoming.infoLength);
-
-  const size_t staged =
-      g_incoming.infoLength + kRecordBytes + g_incoming.dataLength;
-  const bool written =
-      g_board->programExternalData(g_staging.get(), staged, recordAddress());
-  // Released before the model is rebuilt, so the staging copy and the retained
-  // program are never both held. The vision model makes that difference large.
-  g_staging.reset();
-  return written && loadInstalledModel();
-}
-
-/** @brief Check what the phone sent for the phase that has just finished. */
-void completePhase() {
-  const bool info = g_incoming.phase == kTransferInfo;
-  const uint32_t expected =
-      info ? g_incoming.combinedCrc32 : g_incoming.dataCrc32;
-  const uint32_t actual =
-      info ? computeCombinedCrc32()
-           : crc32Update(0u, stagingData(), g_incoming.dataLength);
-
-  Serial.print(kLogPrefix);
-  Serial.print(" transfer phase=");
-  Serial.print(info ? "info" : "data");
-  Serial.print(" received=");
-  Serial.print(static_cast<unsigned long>(g_incoming.received));
-  Serial.print(" crc=0x");
-  Serial.print(actual, HEX);
-  Serial.print(" expected=0x");
-  Serial.println(expected, HEX);
-
-  if (actual != expected) {
-    g_pending_ack = kAckCrcFail;
-    return;
-  }
-  g_pending_ack = kAckWriteDone;
-  g_install_pending = !info;
-}
-
-/**
- * @brief Take one chunk of file bytes into the staging buffer.
- *
- * @param bytes  Chunk the phone wrote.
- * @param count  Number of bytes in it.
- */
-void receiveChunk(const uint8_t* bytes, size_t count) {
-  if (g_staging == nullptr) {
-    return;
-  }
-  const uint32_t expected = g_incoming.phase == kTransferInfo
-                                ? g_incoming.infoLength
-                                : g_incoming.dataLength;
-  uint8_t* destination =
-      g_incoming.phase == kTransferInfo ? stagingInfo() : stagingData();
-  if (g_incoming.received >= expected) {
-    return;
-  }
-  if (g_incoming.received + count > expected) {
-    count = expected - g_incoming.received;
-  }
-  memcpy(destination + g_incoming.received, bytes, count);
-  g_incoming.received += count;
-
-  if (g_incoming.received >= expected) {
-    completePhase();
-  }
-}
-
-/**
- * @brief Allocate the staging buffer once the phone announces the total size.
- *
- * @return True when the buffer was allocated.
- */
-bool allocateStaging() {
-  // Both lengths are the phone's word for it, and everything downstream is
-  // sized from them, so they are bounded here rather than trusted. The info
-  // half has to fit in the record that is written at the head of the slot.
-  if (g_incoming.infoLength < kMinProgramBytes ||
-      g_incoming.infoLength > kMaxInfoBytes) {
-    return false;
-  }
-  if (g_incoming.totalLength <= g_incoming.infoLength) {
-    return false;
-  }
-  g_incoming.dataLength = g_incoming.totalLength - g_incoming.infoLength;
-  if (g_incoming.dataLength + kRecordBytes > kModelSlotBytes) {
-    return false;
-  }
-  g_staging.reset(new uint8_t[g_incoming.infoLength + kRecordBytes +
-                              g_incoming.dataLength]);
-  return g_staging != nullptr;
-}
-
-/**
- * @brief Take the model name from the filesystem path the phone wrote.
- *
- * @param characteristic  The path characteristic the phone has just written.
- */
+/** @brief Take the model name from the filesystem path the phone wrote. */
 void readModelName(const BLECharacteristic& characteristic) {
   char path[kMaxNameLength] = {0};
   size_t length = static_cast<size_t>(characteristic.valueLength());
@@ -671,101 +374,795 @@ void readModelName(const BLECharacteristic& characteristic) {
 
   const char* last = strrchr(path, '/');
   const char* name = last != nullptr ? last + 1 : path;
-  memset(g_incoming.name, 0, kMaxNameLength);
-  strncpy(g_incoming.name, name, kMaxNameLength - 1u);
+  memset(g_session.name, 0, kMaxNameLength);
+  strncpy(g_session.name, name, kMaxNameLength - 1u);
 }
 
-/** @brief Note the start of a phase and tell the phone the board is ready. */
-void beginPhase(const BLECharacteristic& characteristic) {
-  const uint32_t size = readU32(characteristic);
-  g_incoming.received = 0u;
-  if (g_incoming.phase == kTransferInfo) {
-    g_incoming.infoLength = size;
-    g_incoming.active = true;
-    if (g_on_activity != nullptr) {
-      g_on_activity(true);
+/**
+ * @brief Recompute the CRC the phone sent with the info file.
+ *
+ * The phone runs it over a header built from the fields it wrote to the
+ * metadata characteristics, followed by the info bytes, so the same header has
+ * to be rebuilt here to check it.
+ *
+ * @param info       The received program info bytes.
+ * @param infoBytes  How many of them there are.
+ * @return The CRC of the header and those bytes.
+ */
+uint32_t computeCombinedCrc32(const uint8_t* info, size_t infoBytes) {
+  uint8_t header[kCrcHeaderBytes];
+  memset(header, 0, sizeof(header));
+
+  const uint32_t fields[kCrcHeaderFields] = {
+      g_session.totalLength,    g_session.inputShape[0],
+      g_session.inputShape[1],  g_session.inputShape[2],
+      g_session.outputShape[0], g_session.outputShape[1],
+      g_session.outputShape[2], g_session.flashOffset,
+      g_session.isEdgeLearned,  g_session.numEdgeClasses,
+      g_session.infoLength,     g_session.mfccFsBits,
+      g_session.silenceClass,   g_session.unknownClass,
+      g_session.inferenceMode};
+  for (size_t index = 0u; index < kCrcHeaderFields; ++index) {
+    writeU32At(header, index * 4u, fields[index]);
+  }
+  memcpy(&header[kCrcHeaderFields * 4u], g_session.name,
+         strnlen(g_session.name, kMaxNameLength));
+
+  return crc32Update(crc32Update(0u, header, sizeof(header)), info, infoBytes);
+}
+
+/**
+ * @brief Say whether a buffer is a program info blob this engine can load.
+ *
+ * Everything here arrives over Bluetooth, and the engine does not reject a
+ * malformed or foreign program info: it calls panic(), which halts the core
+ * and takes USB down with it, leaving the board recoverable only with the
+ * reset button. So the same things the engine would panic over are checked
+ * here first, where a refusal can be reported instead.
+ *
+ * The blob is one size-prefixed FlatBuffers buffer and nothing else, so its
+ * prefix has to account for exactly the bytes received. The engine also
+ * refuses a program built for another Akida version, so the version string it
+ * expects has to appear in the blob.
+ *
+ * @param programInfo   The program info half on its own.
+ * @param programBytes  Its length.
+ * @return True when it is safe to hand to the engine.
+ */
+bool programInfoAcceptable(const uint8_t* programInfo, size_t programBytes) {
+  if (programInfo == nullptr || programBytes <= kSizePrefixBytes) {
+    return false;
+  }
+  if (readU32At(programInfo, 0u) + kSizePrefixBytes != programBytes) {
+    return false;
+  }
+
+  // The version is a null-terminated string inside the info flatbuffer, so it
+  // is looked for rather than parsed: a wrong one must not reach the engine.
+  const char* expected = akida::version();
+  const size_t expectedBytes = strlen(expected) + 1u;
+  if (expectedBytes > programBytes) {
+    return false;
+  }
+  for (size_t start = 0u; start + expectedBytes <= programBytes; ++start) {
+    if (memcmp(programInfo + start, expected, expectedBytes) == 0) {
+      return true;
     }
   }
-  // Nothing is erased here: the flash write happens once, after the data
-  // phase. The ack tells the phone the board is ready for the bytes.
-  g_pending_ack = kAckEraseDone;
+  return false;
+}
 
+/**
+ * @brief Turn the record describing the installed model into its description.
+ *
+ * @param programInfo  The program info the engine was loaded from, which must
+ *                     outlive the loaded model.
+ * @return The description of the model.
+ */
+Loaded describe(const uint8_t* programInfo) {
+  Loaded described;
+  described.programInfo = programInfo;
+  described.programInfoBytes = g_record.infoLength;
+  described.dataAddress = g_record.dataAddress;
+  described.programBytes = g_record.infoLength + g_record.dataLength;
+  described.classCount =
+      static_cast<uint8_t>(shapeVolume(g_record.outputShape));
+  described.silenceClass = static_cast<uint8_t>(g_record.silenceClass);
+  described.unknownClass = static_cast<uint8_t>(g_record.unknownClass);
+  memcpy(&described.mfccFullScale, &g_record.mfccFsBits, sizeof(float));
+  memcpy(described.name, g_record.name, kMaxNameLength);
+  described.name[kMaxNameLength - 1u] = '\0';
+  described.valid = true;
+  return described;
+}
+
+/** @brief The CRC covering everything in the record past its own CRC field. */
+uint32_t recordCrc32(const Record& record) {
+  const uint8_t* covered = reinterpret_cast<const uint8_t*>(&record.infoLength);
+  return crc32Update(0u, covered,
+                     sizeof(Record) - offsetof(Record, infoLength));
+}
+
+/**
+ * @brief Fill in the record that opens the slot from the session just sent.
+ *
+ * @param dataFirstBytes  The first four bytes of the model data, as they read
+ *                        back out of flash.
+ */
+void fillRecord(const uint8_t* dataFirstBytes) {
+  memset(&g_record, 0, sizeof(Record));
+  memcpy(g_record.magic, "BB15", 4);
+  g_record.version = kRecordVersion;
+  g_record.infoLength = g_session.infoLength;
+  g_record.dataLength = g_session.dataLength;
+  g_record.dataCrc32 = g_session.dataCrc32;
+  g_record.dataAddress = transferDataAddress();
+  memcpy(g_record.dataFirstBytes, dataFirstBytes,
+         sizeof(g_record.dataFirstBytes));
+  memcpy(g_record.outputShape, g_session.outputShape,
+         sizeof(g_record.outputShape));
+  g_record.mfccFsBits = g_session.mfccFsBits;
+  g_record.silenceClass = g_session.silenceClass;
+  g_record.unknownClass = g_session.unknownClass;
+  memcpy(g_record.name, g_session.name, kMaxNameLength);
+  g_record.recordCrc32 = recordCrc32(g_record);
+}
+
+/**
+ * @brief Say whether a record read out of flash describes a usable model.
+ *
+ * @param record  Record as it was read.
+ * @return True when it is one this build wrote and its fields are in range.
+ */
+bool recordUsable(const Record& record) {
+  return memcmp(record.magic, "BB15", 4) == 0 &&
+         record.version == kRecordVersion &&
+         record.infoLength > kSizePrefixBytes &&
+         record.infoLength <= kMaxInfoBytes && record.dataLength > 0u &&
+         record.dataLength <= kModelSlotBytes - kRecordBytes &&
+         recordCrc32(record) == record.recordCrc32;
+}
+
+/**
+ * @brief Send the phone one status notification.
+ *
+ * @param result    One of the result codes.
+ * @param position  The byte the board expects next, or where it gave up.
+ */
+void notifyStatus(uint8_t result, uint32_t position) {
+  uint8_t frame[kStatusBytes];
+  frame[0] = result;
+  frame[1] = g_transfer.type;
+  writeU32At(frame, 2u, kBlockBytes);
+  writeU32At(frame, 6u, position);
+  writeU32At(frame, 10u, g_transfer.total);
+  g_status.writeValue(frame, static_cast<int>(kStatusBytes));
+}
+
+/** @brief Queue the status poll() will send next. */
+void queueStatus(uint8_t result, uint32_t position) {
+  g_pending_result = result;
+  g_pending_position = position;
+}
+
+/** @brief Give up the half in flight and let go of the block it was using. */
+void endTransfer() {
+  g_transfer.active = false;
+  g_transfer.staged = 0u;
+  g_block.reset();
+}
+
+/** @brief Give up the whole session, so the next thing accepted is a START. */
+void endSession() {
+  endTransfer();
+  g_incoming_info.reset();
+  if (g_session.active && g_on_activity != nullptr) {
+    g_on_activity(false);
+  }
+  g_session.active = false;
+}
+
+/**
+ * @brief Refuse the transfer, telling the phone why.
+ *
+ * Every code but OK, DONE and READY ends the transfer, so the phone is told
+ * and the board goes back to waiting for a START.
+ *
+ * @param result  The code to report.
+ */
+void refuse(uint8_t result) {
   Serial.print(kLogPrefix);
-  Serial.print(" transfer phase=");
-  Serial.print(g_incoming.phase == kTransferInfo ? "info" : "data");
-  Serial.print(" size=");
-  Serial.println(static_cast<unsigned long>(size));
+  Serial.print(" transfer refused type=");
+  Serial.print(g_transfer.type == kTransferInfo ? "info" : "data");
+  Serial.print(" result=0x");
+  Serial.print(result, HEX);
+  Serial.print(" position=");
+  Serial.println(static_cast<unsigned long>(g_transfer.position));
+
+  queueStatus(result, g_transfer.position);
+  endSession();
+}
+
+/**
+ * @brief Forget the model the engine is running, because it is being replaced.
+ *
+ * The first committed block of a new model overwrites the flash the old one is
+ * read from, so from that moment the board has nothing to score with and says
+ * so rather than running a model that is no longer there.
+ */
+void forgetLoadedModel() {
+  if (!g_loaded.valid) {
+    return;
+  }
+  g_loaded = Loaded();
+  if (g_on_loaded != nullptr) {
+    g_on_loaded(g_loaded);
+  }
+}
+
+/**
+ * @brief Begin the info half, which is small enough to be one block.
+ *
+ * @param total  Bytes of program info the phone is about to send.
+ */
+void beginInfoTransfer(uint32_t total) {
+  endSession();
+  g_transfer = Transfer();
+  g_transfer.type = kTransferInfo;
+  g_transfer.total = total;
+
+  if (total <= kSizePrefixBytes || total > kMaxInfoBytes ||
+      g_session.name[0] == '\0') {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  g_block.reset(new uint8_t[kBlockBytes]);
+  if (g_block == nullptr) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  g_session.infoLength = total;
+  g_session.infoCrc32 = g_pending_crc32;
+  g_session.active = true;
+  g_transfer.active = true;
+
+  if (g_on_activity != nullptr) {
+    g_on_activity(true);
+  }
+  queueStatus(kResultOk, 0u);
+}
+
+/**
+ * @brief Begin the data half, which inherits the session's metadata.
+ *
+ * @param total  Bytes of model data the phone is about to send.
+ */
+void beginDataTransfer(uint32_t total) {
+  endTransfer();
+  g_transfer = Transfer();
+  g_transfer.type = kTransferData;
+  g_transfer.total = total;
+
+  if (g_incoming_info == nullptr || !g_session.flashOffsetSet) {
+    refuse(kResultErrState);
+    return;
+  }
+  if (total == 0u ||
+      (g_session.flashOffset & (kBB15ExternalFlashSectorBytes - 1u)) != 0u ||
+      g_session.flashOffset < kRecordBytes ||
+      g_session.flashOffset + total > kModelSlotBytes) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  g_block.reset(new uint8_t[kBlockBytes]);
+  if (g_block == nullptr) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  g_session.dataLength = total;
+  g_session.dataCrc32 = g_pending_crc32;
+  g_transfer.active = true;
+  g_work = Work::ArmDataTransfer;
+}
+
+/**
+ * @brief Handle a write to the control characteristic.
+ *
+ * @param frame   The bytes the phone wrote.
+ * @param length  How many of them there are.
+ */
+void onControlWritten(const uint8_t* frame, size_t length) {
+  if (length == 1u && frame[0] == kControlAbort) {
+    Serial.print(kLogPrefix);
+    Serial.println(" transfer aborted by phone");
+    queueStatus(kResultAborted, 0u);
+    endSession();
+    return;
+  }
+  if (length != kStartFrameBytes || frame[0] != kControlStart) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  // A transfer the board has no way to report on is not worth beginning.
+  if (!g_status.subscribed()) {
+    Serial.print(kLogPrefix);
+    Serial.println(" transfer refused: status notifications are not enabled");
+    endSession();
+    return;
+  }
+
+  const uint8_t type = frame[1];
+  const uint32_t total = readU32At(frame, 2u);
+  Serial.print(kLogPrefix);
+  Serial.print(" transfer start type=");
+  Serial.print(type == kTransferInfo ? "info" : "data");
+  Serial.print(" total=");
+  Serial.print(static_cast<unsigned long>(total));
+  Serial.print(" block=");
+  Serial.println(static_cast<unsigned long>(kBlockBytes));
+
+  if (type == kTransferInfo) {
+    beginInfoTransfer(total);
+  } else if (type == kTransferData) {
+    beginDataTransfer(total);
+  } else {
+    refuse(kResultErrParam);
+  }
+}
+
+/** @brief Bytes of the block in flight, which is short only at the end. */
+uint32_t blockLength() {
+  const uint32_t remaining = g_transfer.total - g_transfer.position;
+  return remaining < kBlockBytes ? remaining : kBlockBytes;
+}
+
+/**
+ * @brief Take one write of model bytes into the block being staged.
+ *
+ * Nothing here answers at ATT level: every outcome is a status notification,
+ * so a write with a response and one without behave the same.
+ *
+ * @param frame   The bytes the phone wrote, opening with the file offset.
+ * @param length  How many of them there are.
+ */
+void onDataWritten(const uint8_t* frame, size_t length) {
+  if (!g_transfer.active) {
+    refuse(kResultErrState);
+    return;
+  }
+  if (length <= kOffsetBytes) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  const uint32_t offset = readU32At(frame, 0u);
+  const uint32_t payload = static_cast<uint32_t>(length - kOffsetBytes);
+  if (offset != g_transfer.position + g_transfer.staged) {
+    Serial.print(kLogPrefix);
+    Serial.print(" transfer offset expected=");
+    Serial.print(
+        static_cast<unsigned long>(g_transfer.position + g_transfer.staged));
+    Serial.print(" got=");
+    Serial.println(static_cast<unsigned long>(offset));
+    queueStatus(kResultErrOffset, g_transfer.position + g_transfer.staged);
+    endSession();
+    return;
+  }
+  if (payload > blockLength() - g_transfer.staged) {
+    refuse(kResultErrParam);
+    return;
+  }
+
+  memcpy(g_block.get() + g_transfer.staged, frame + kOffsetBytes, payload);
+  g_transfer.staged += payload;
+  g_transfer.crc32 =
+      crc32Update(g_transfer.crc32, frame + kOffsetBytes, payload);
+
+  if (g_transfer.staged == blockLength()) {
+    g_work = Work::CommitBlock;
+  }
 }
 
 /** @brief Handle every write the phone makes to the transfer service. */
 void onCharacteristicWritten(BLEDevice, BLECharacteristic characteristic) {
+  const uint8_t* value = characteristic.value();
+  const size_t length = static_cast<size_t>(characteristic.valueLength());
+
   switch (characteristicCode(characteristic)) {
-    case kCodeTransferType:
-      g_incoming.phase = characteristic.value()[0];
-      g_incoming.received = 0u;
+    case kCodeControl:
+      onControlWritten(value, length);
       break;
-    case kCodeFileSize:
-      beginPhase(characteristic);
-      break;
-    case kCodeTotalLength:
-      g_incoming.totalLength = readU32(characteristic);
-      if (!allocateStaging()) {
-        Serial.print(kLogPrefix);
-        Serial.println(" transfer staging_failed");
-        g_pending_ack = kAckCrcFail;
-        abandonTransfer();
-      } else {
-        Serial.print(kLogPrefix);
-        Serial.print(" transfer total=");
-        Serial.print(static_cast<unsigned long>(g_incoming.totalLength));
-        Serial.print(" data=");
-        Serial.println(static_cast<unsigned long>(g_incoming.dataLength));
-      }
+    case kCodeData:
+      onDataWritten(value, length);
       break;
     case kCodeFileCrc:
-      if (g_incoming.phase == kTransferInfo) {
-        g_incoming.combinedCrc32 = readU32(characteristic);
-      } else {
-        g_incoming.dataCrc32 = readU32(characteristic);
-      }
+      g_pending_crc32 = readU32(characteristic);
       break;
-    case kCodeFileTransfer:
-      receiveChunk(characteristic.value(),
-                   static_cast<size_t>(characteristic.valueLength()));
+    case kCodeTotalLength:
+      g_session.totalLength = readU32(characteristic);
       break;
     case kCodeFsName:
       readModelName(characteristic);
       break;
     case kCodeInputShape:
-      readShape(characteristic, g_incoming.inputShape);
+      readShape(characteristic, g_session.inputShape);
       break;
     case kCodeOutputShape:
-      readShape(characteristic, g_incoming.outputShape);
+      readShape(characteristic, g_session.outputShape);
       break;
     case kCodeFlashAddress:
-      g_incoming.flashAddress = readU32(characteristic);
+      g_session.flashOffset = readU32(characteristic);
+      g_session.flashOffsetSet = true;
       break;
     case kCodeIsEdgeLearned:
-      g_incoming.isEdgeLearned = readU32(characteristic);
+      g_session.isEdgeLearned = readU32(characteristic);
       break;
     case kCodeNumEdgeClasses:
-      g_incoming.numEdgeClasses = readU32(characteristic);
+      g_session.numEdgeClasses = readU32(characteristic);
       break;
     case kCodeMfccFs:
-      g_incoming.mfccFsBits = readU32(characteristic);
+      g_session.mfccFsBits = readU32(characteristic);
       break;
     case kCodeSilenceClass:
-      g_incoming.silenceClass = readU32(characteristic);
+      g_session.silenceClass = readU32(characteristic);
       break;
     case kCodeUnknownClass:
-      g_incoming.unknownClass = readU32(characteristic);
+      g_session.unknownClass = readU32(characteristic);
       break;
     case kCodeInferenceMode:
-      g_incoming.inferenceMode = readU32(characteristic);
+      g_session.inferenceMode = readU32(characteristic);
       break;
     default:
       break;
   }
+}
+
+/**
+ * @brief Take the record naming the stored model away, then answer the START.
+ *
+ * The moment the first block is written, any record describing that flash is a
+ * lie: it names a length and a CRC for bytes that are no longer there. Taking
+ * it away first means a transfer that stops part way boots into "there is no
+ * model", which is the truth and a state this sketch already handles.
+ */
+void armDataTransfer() {
+  forgetLoadedModel();
+
+  BridgeHold bridge(*g_board);
+  if (!bridge.held() ||
+      !g_board->eraseExternalData(recordAddress(), kRecordBytes)) {
+    refuse(kResultErrFlash);
+    return;
+  }
+  queueStatus(kResultOk, 0u);
+}
+
+/**
+ * @brief Check the info half the phone has just finished sending.
+ *
+ * Nothing is written here. The info is kept until the data half completes,
+ * because the record that carries it into flash also carries the length and
+ * the CRC of the data, and those are not known yet.
+ */
+void completeInfoTransfer() {
+  const uint32_t actual = computeCombinedCrc32(g_block.get(), g_transfer.total);
+  if (actual != g_session.infoCrc32) {
+    Serial.print(kLogPrefix);
+    Serial.print(" transfer info crc=0x");
+    Serial.print(actual, HEX);
+    Serial.print(" expected=0x");
+    Serial.println(g_session.infoCrc32, HEX);
+    refuse(kResultErrIntegrity);
+    return;
+  }
+  if (!programInfoAcceptable(g_block.get(), g_transfer.total)) {
+    Serial.print(kLogPrefix);
+    Serial.println(" model refused: not a program this engine can load");
+    refuse(kResultErrParam);
+    return;
+  }
+
+  g_incoming_info.reset(new uint8_t[g_transfer.total]);
+  if (g_incoming_info == nullptr) {
+    refuse(kResultErrParam);
+    return;
+  }
+  memcpy(g_incoming_info.get(), g_block.get(), g_transfer.total);
+
+  g_transfer.position = g_transfer.total;
+  endTransfer();
+  queueStatus(kResultDone, g_transfer.total);
+}
+
+/**
+ * @brief Write the block just staged into the sector it belongs in.
+ *
+ * @return True when the sector erased, programmed and read back as written.
+ */
+bool writeStagedBlock() {
+  BridgeHold bridge(*g_board);
+  const uint32_t address = transferDataAddress() + g_transfer.position;
+  return bridge.held() &&
+         g_board->eraseExternalData(address, g_transfer.staged) &&
+         g_board->writeExternalData(address, g_block.get(), g_transfer.staged);
+}
+
+/**
+ * @brief Read the whole stored model back and check it against what arrived.
+ *
+ * The block by block readback has already proved each sector, so this is the
+ * second, independent check the standard asks for: that the file as a whole is
+ * in flash and reads as the phone's own CRC says it should.
+ *
+ * @param firstBytes  Receives the first four bytes of the stored model.
+ * @return True when the stored model matches the CRC the phone sent.
+ */
+bool storedModelMatches(uint8_t* firstBytes) {
+  const uint32_t address = transferDataAddress();
+  uint32_t crc = 0u;
+  for (uint32_t offset = 0u; offset < g_session.dataLength;
+       offset += kBlockBytes) {
+    const uint32_t remaining = g_session.dataLength - offset;
+    const uint32_t chunk = remaining < kBlockBytes ? remaining : kBlockBytes;
+    if (!g_board->readExternalData(address + offset, g_block.get(), chunk)) {
+      return false;
+    }
+    if (offset == 0u) {
+      memcpy(firstBytes, g_block.get(), 4u);
+    }
+    crc = crc32Update(crc, g_block.get(), chunk);
+  }
+
+  if (crc != g_session.dataCrc32) {
+    Serial.print(kLogPrefix);
+    Serial.print(" stored model crc=0x");
+    Serial.print(crc, HEX);
+    Serial.print(" expected=0x");
+    Serial.println(g_session.dataCrc32, HEX);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Write the record and the program info into the sector that opens the
+ *        slot.
+ *
+ * @return True when the sector erased, programmed and read back as written.
+ */
+bool storeRecord() {
+  memcpy(g_block.get(), &g_record, sizeof(Record));
+  memcpy(g_block.get() + sizeof(Record), g_incoming_info.get(),
+         g_session.infoLength);
+  const size_t used = sizeof(Record) + g_session.infoLength;
+  return g_board->eraseExternalData(recordAddress(), kRecordBytes) &&
+         g_board->writeExternalData(recordAddress(), g_block.get(), used);
+}
+
+/**
+ * @brief Check and store the model whose last block has just been committed.
+ *
+ * The record is written only once the bytes have been proved to be in flash,
+ * so nothing claims a model is present until one is.
+ */
+void completeDataTransfer() {
+  if (g_transfer.crc32 != g_session.dataCrc32) {
+    Serial.print(kLogPrefix);
+    Serial.print(" transfer data crc=0x");
+    Serial.print(g_transfer.crc32, HEX);
+    Serial.print(" expected=0x");
+    Serial.println(g_session.dataCrc32, HEX);
+    refuse(kResultErrIntegrity);
+    return;
+  }
+
+  const uint32_t started = millis();
+  uint8_t firstBytes[4] = {0};
+  BridgeHold bridge(*g_board);
+  if (!bridge.held() || !storedModelMatches(firstBytes)) {
+    refuse(kResultErrIntegrity);
+    return;
+  }
+
+  fillRecord(firstBytes);
+  if (!storeRecord()) {
+    refuse(kResultErrFlash);
+    return;
+  }
+
+  Serial.print(kLogPrefix);
+  Serial.print(" model stored bytes=");
+  Serial.print(
+      static_cast<unsigned long>(g_session.infoLength + g_session.dataLength));
+  Serial.print(" checked_and_recorded_ms=");
+  Serial.println(static_cast<unsigned long>(millis() - started));
+
+  endTransfer();
+  queueStatus(kResultDone, g_transfer.total);
+  g_work = Work::InstallModel;
+}
+
+/** @brief Write the block just staged, and say what to do next. */
+void commitStagedBlock() {
+  const uint32_t started = millis();
+  if (!writeStagedBlock()) {
+    Serial.print(kLogPrefix);
+    Serial.print(" block write failed detail=");
+    g_board->printLastError(Serial);
+    refuse(kResultErrFlash);
+    return;
+  }
+
+  g_transfer.position += g_transfer.staged;
+  g_transfer.staged = 0u;
+  Serial.print(kLogPrefix);
+  Serial.print(" block committed position=");
+  Serial.print(static_cast<unsigned long>(g_transfer.position));
+  Serial.print(" of ");
+  Serial.print(static_cast<unsigned long>(g_transfer.total));
+  Serial.print(" ms=");
+  Serial.println(static_cast<unsigned long>(millis() - started));
+
+  if (g_transfer.position < g_transfer.total) {
+    queueStatus(kResultOk, g_transfer.position);
+    return;
+  }
+  completeDataTransfer();
+}
+
+/**
+ * @brief Load the model the record describes, reading its data from flash.
+ *
+ * @param programInfo   The program info half, which the engine keeps a pointer
+ *                      to for as long as the model stays loaded.
+ * @param programBytes  Its length.
+ * @return True when the runner accepted it.
+ */
+bool loadModelFromFlash(const uint8_t* programInfo, size_t programBytes) {
+  const BB15Model model = BB15Model::fromExternalFlash(
+      programInfo, programBytes, g_record.dataAddress);
+  return g_runner->loadModel(model) == BB15Status::Ok;
+}
+
+/**
+ * @brief Run one inference on a blank input, to prove the model really runs.
+ *
+ * A model can be stored, verified and programmed and still not run, so the
+ * board says it is ready only after it has scored something with it.
+ *
+ * @return True when the engine returned a result.
+ */
+bool modelInfers() {
+  const akida::Shape dimensions = g_runner->modelInfo().input.dimensions;
+  const size_t elements = akida::shape_size(dimensions);
+  if (elements == 0u) {
+    return false;
+  }
+  std::unique_ptr<uint8_t[]> blank(new uint8_t[elements]());
+  return g_runner->infer(blank.get(), dimensions).ok();
+}
+
+/**
+ * @brief Program the BrainBoard with the model just stored and prove it runs.
+ *
+ * The info blob is kept whatever happens, because the engine holds a pointer
+ * to whatever it was last programmed from.
+ */
+void installStoredModel() {
+  const uint32_t started = millis();
+  std::unique_ptr<uint8_t[]> info = std::move(g_incoming_info);
+  const bool ready =
+      loadModelFromFlash(info.get(), g_record.infoLength) && modelInfers();
+  g_loaded_info = std::move(info);
+
+  Serial.print(kLogPrefix);
+  Serial.print(" install ok=");
+  Serial.print(ready ? 1 : 0);
+  Serial.print(" ms=");
+  Serial.println(static_cast<unsigned long>(millis() - started));
+  if (!ready) {
+    Serial.print(kLogPrefix);
+    Serial.print(" install detail=");
+    g_board->printLastError(Serial);
+    queueStatus(kResultErrProgram, g_transfer.total);
+    endSession();
+    return;
+  }
+
+  g_loaded = describe(g_loaded_info.get());
+  queueStatus(kResultReady, g_transfer.total);
+  endSession();
+  if (g_on_loaded != nullptr) {
+    g_on_loaded(g_loaded);
+  }
+}
+
+/**
+ * @brief Read the installed model's record and program info out of the slot.
+ *
+ * The bridge has to be taken over for the read: the memory mapped path the
+ * board uses otherwise is not up on a cold boot, and the read simply fails.
+ *
+ * @param programInfo  Receives the program info half.
+ * @return True when a usable record and its program info were read.
+ */
+bool readInstalledModel(std::unique_ptr<uint8_t[]>* programInfo) {
+  BridgeHold bridge(*g_board);
+  if (!bridge.held()) {
+    return false;
+  }
+
+  std::unique_ptr<uint8_t[]> sector(new uint8_t[kRecordBytes]);
+  if (!g_board->readExternalData(recordAddress(), sector.get(), kRecordBytes)) {
+    return false;
+  }
+  memcpy(&g_record, sector.get(), sizeof(Record));
+  if (!recordUsable(g_record)) {
+    return false;
+  }
+
+  uint8_t firstBytes[4] = {0};
+  if (!g_board->readExternalData(g_record.dataAddress, firstBytes,
+                                 sizeof(firstBytes)) ||
+      memcmp(firstBytes, g_record.dataFirstBytes, sizeof(firstBytes)) != 0) {
+    Serial.print(kLogPrefix);
+    Serial.println(
+        " model refused: flash does not hold the model the record "
+        "describes");
+    return false;
+  }
+
+  programInfo->reset(new uint8_t[g_record.infoLength]);
+  memcpy(programInfo->get(), sector.get() + sizeof(Record),
+         g_record.infoLength);
+  return true;
+}
+
+/** @brief Abandon a transfer whose phone has gone away. */
+void dropTransferIfDisconnected() {
+  if (g_session.active && !BLE.connected()) {
+    Serial.print(kLogPrefix);
+    Serial.println(" transfer abandoned: the phone disconnected");
+    endSession();
+  }
+}
+
+/** @brief Carry out whatever the last Bluetooth write asked poll() to do. */
+void runQueuedWork() {
+  const Work work = g_work;
+  g_work = Work::None;
+  switch (work) {
+    case Work::ArmDataTransfer:
+      armDataTransfer();
+      break;
+    case Work::CommitBlock:
+      if (g_transfer.type == kTransferInfo) {
+        completeInfoTransfer();
+      } else {
+        commitStagedBlock();
+      }
+      break;
+    case Work::InstallModel:
+      installStoredModel();
+      break;
+    case Work::None:
+      break;
+  }
+}
+
+/** @brief Send the status the work just done left waiting. */
+void sendQueuedStatus() {
+  if (g_pending_result == kResultNone) {
+    return;
+  }
+  const uint8_t result = g_pending_result;
+  g_pending_result = kResultNone;
+  notifyStatus(result, g_pending_position);
 }
 
 }  // namespace
@@ -774,15 +1171,23 @@ void begin(BB15& board, BB15Runner& runner) {
   g_board = &board;
   g_runner = &runner;
 
-  BLECharacteristic* const written[] = {
-      &g_file_transfer,   &g_file_size,        &g_app_index,
-      &g_file_crc,        &g_transfer_type,    &g_input_shape,
-      &g_output_shape,    &g_flash_address,    &g_total_length,
-      &g_is_edge_learned, &g_num_edge_classes, &g_fs_name,
-      &g_mfcc_fs,         &g_silence_class,    &g_unknown_class,
-      &g_inference_mode};
+  BLECharacteristic* const written[] = {&g_data,
+                                        &g_control,
+                                        &g_app_index,
+                                        &g_file_crc,
+                                        &g_input_shape,
+                                        &g_output_shape,
+                                        &g_flash_address,
+                                        &g_total_length,
+                                        &g_is_edge_learned,
+                                        &g_num_edge_classes,
+                                        &g_fs_name,
+                                        &g_mfcc_fs,
+                                        &g_silence_class,
+                                        &g_unknown_class,
+                                        &g_inference_mode};
 
-  g_service.addCharacteristic(g_ack);
+  g_service.addCharacteristic(g_status);
   for (BLECharacteristic* characteristic : written) {
     g_service.addCharacteristic(*characteristic);
     characteristic->setEventHandler(BLEWritten, onCharacteristicWritten);
@@ -796,9 +1201,23 @@ void setHandlers(LoadedHandler onLoaded, ActivityHandler onActivity) {
 }
 
 bool restoreFromFlash() {
-  if (!loadInstalledModel()) {
+  std::unique_ptr<uint8_t[]> programInfo;
+  if (!readInstalledModel(&programInfo)) {
     return false;
   }
+  if (!programInfoAcceptable(programInfo.get(), g_record.infoLength)) {
+    Serial.print(kLogPrefix);
+    Serial.println(" model refused: not a program this engine can load");
+    return false;
+  }
+
+  const bool ready = loadModelFromFlash(programInfo.get(), g_record.infoLength);
+  g_loaded_info = std::move(programInfo);
+  if (!ready) {
+    return false;
+  }
+
+  g_loaded = describe(g_loaded_info.get());
   if (g_on_loaded != nullptr) {
     g_on_loaded(g_loaded);
   }
@@ -806,39 +1225,12 @@ bool restoreFromFlash() {
 }
 
 void poll() {
-  if (g_pending_ack != 0u) {
-    const uint8_t ack = g_pending_ack;
-    g_pending_ack = 0u;
-    g_ack.writeValue(&ack, 1);
-    if (ack == kAckCrcFail) {
-      abandonTransfer();
-    }
-  }
-
-  if (!g_install_pending) {
-    return;
-  }
-  g_install_pending = false;
-
-  const uint32_t started = millis();
-  const bool installed = installStagedModel();
-  Serial.print(kLogPrefix);
-  Serial.print(" install ok=");
-  Serial.print(installed ? 1 : 0);
-  Serial.print(" ms=");
-  Serial.println(static_cast<unsigned long>(millis() - started));
-  if (!installed) {
-    Serial.print(kLogPrefix);
-    Serial.print(" install detail=");
-    g_board->printLastError(Serial);
-  }
-  abandonTransfer();
-  if (installed && g_on_loaded != nullptr) {
-    g_on_loaded(g_loaded);
-  }
+  dropTransferIfDisconnected();
+  runQueuedWork();
+  sendQueuedStatus();
 }
 
-bool transferInProgress() { return g_incoming.active; }
+bool transferInProgress() { return g_session.active; }
 
 const Loaded& loaded() { return g_loaded; }
 

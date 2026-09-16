@@ -34,6 +34,70 @@ will not load on this board**, because that firmware is built against Akida
 2.17.0. The board reports the refusal over its serial port and keeps running;
 it does not load a model it cannot trust.
 
+## How the model arrives
+
+The board speaks the same model transfer protocol as AkidaTag, so one path in
+the app serves both boards. It is specified in `docs/ble-model-transfer.md` in
+the AkidaTag firmware repository, which is the contract both sides are built
+from; what follows is what a reader of this sketch needs.
+
+A session is the metadata characteristics, then the program info, then the
+model data, in that order on one connection. Each half is sent a block at a
+time: every write to `f000aa01` opens with the four byte little-endian offset
+of the bytes behind it, and at each block boundary the board answers on
+`f000aa02` with a fourteen byte status record saying what it did and which byte
+it expects next.
+
+**The phone never assumes a block size.** The board reports its own in every
+status, and here that is one flash sector, 4,096 bytes, because a sector is the
+least the BrainBoard's flash can commit and therefore all of a model the board
+ever has to hold. A block is erased, programmed and read back before the board
+acknowledges it, so an acknowledged block is one that is genuinely in flash.
+
+`f000aa03` carries the two control messages, START and ABORT. START names the
+half and its length, so the separate file size and transfer type
+characteristics the earlier protocol used are gone. There is one path and no
+fallback, and an interrupted transfer is started again from zero rather than
+resumed.
+
+The board answers `DONE` when the whole file is stored and checked, and
+`READY` only once it has programmed the BrainBoard with the model and scored
+one inference with it. Those mean different things and the app shows them
+differently: `DONE` is the progress bar reaching 100%, `READY` is the update
+having worked.
+
+Two things follow from committing a block at a time, and both are deliberate:
+
+- **From the moment the data half starts, the board has no model.** The record
+  naming the stored model is taken away before the first sector is erased,
+  because a record describing bytes that are being overwritten is a lie. The
+  board says so on its serial port, empties its application list, and stops
+  scoring. A transfer that is then interrupted leaves the board with nothing to
+  run, which is the truth, and the next boot reports exactly that rather than a
+  corrupted model.
+- **Nothing wedges.** A phone that disconnects part way, or simply stops
+  writing, costs the board a staging block and its counters. It goes back to
+  advertising and takes a fresh transfer.
+
+ArduinoBLE gives a write handler no way to answer at ATT level, so the three
+ATT errors the specification names are reported differently here: a malformed
+control frame comes back as `ERR_PARAM` on the status characteristic, which is
+more use to the app than an error code anyway, and a START that arrives before
+the phone has subscribed to the status characteristic is refused in silence,
+because a board that cannot report on a transfer cannot report that either.
+The serial log says which happened.
+
+## What a loaded model costs the sketch
+
+Only the program info stays in memory. The engine reads the model data out of
+BrainBoard flash as it runs, so the host holds 504 bytes for this keyword
+model rather than the whole 22,112 byte program. Measured on the bench, the
+heap with a model loaded is 19,278 bytes where holding the whole program cost
+40,980.
+
+The same is true while a transfer is running: the board holds one 4,096 byte
+block, not the model.
+
 ## Build and run
 
 Compile and upload from the repository root:

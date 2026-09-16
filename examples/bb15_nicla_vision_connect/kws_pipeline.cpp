@@ -414,14 +414,18 @@ bool setModel(BB15Runner* runner, const ModelParameters& parameters) {
   }
 
   g_model = parameters;
-  if (g_model.program == nullptr || g_model.programBytes < 8u ||
+  if (g_model.programInfo == nullptr || g_model.programInfoBytes < 8u ||
       g_model.classCount == 0u || g_model.classCount > kMaxClasses ||
       g_model.mfccFullScale == 0.0f) {
     g_runner = nullptr;
     return false;
   }
 
-  const akida::ProgramInfo info(g_model.program, g_model.programBytes);
+  // The three argument form reads the dequantization out of the info half and
+  // takes the rest of the program as an address in BrainBoard flash, so
+  // nothing but the info has to be held in memory.
+  const akida::ProgramInfo info(g_model.programInfo, g_model.programInfoBytes,
+                                g_model.dataAddress);
   if (!info.is_valid() || info.shifts().size < g_model.classCount ||
       info.scales().size < g_model.classCount) {
     g_runner = nullptr;
