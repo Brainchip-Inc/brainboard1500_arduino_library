@@ -161,6 +161,21 @@ enumerating and still handing out a serial port. Build each packet whole and han
 `Serial.write(buffer, size)`. `examples/bb15_nicla_vision_keyword_spotting/` does this and its `README.md`
 explains it; the Nicla Voice demo does not need to, because its `Serial` is a UART bridged to USB by a SAMD11.
 
+## Loading a model the board did not build
+
+Two things about the Akida engine bite any sketch that takes a model from outside itself.
+
+- **A malformed or foreign program info halts the core.** The engine answers one it cannot parse, or one built
+  for another engine version, by calling `panic()`, which takes USB down with it and leaves the board
+  recoverable only with the reset button. Anything arriving over Bluetooth or a serial link must be checked
+  before the engine sees it: bound the declared lengths before sizing buffers from them, and confirm the size
+  prefix accounts for exactly the buffer and that `akida::version()` appears inside it.
+  `examples/bb15_nicla_vision_connect/ble_model_transfer.cpp` does this in `programInfoAcceptable()`.
+- **A loaded model costs the host its program info and nothing else.** The data half stays in BrainBoard
+  external flash and the engine reads it from there, so there is no reason to hold the whole serialized
+  program. `BB15Model::fromExternalFlash()` in `src/BB15.h` is the entry point, and its docstring says what
+  has to outlive the load.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

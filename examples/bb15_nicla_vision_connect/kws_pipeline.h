@@ -32,8 +32,9 @@ struct Config {
  * model over Bluetooth, so nothing here is hard-coded to one export.
  */
 struct ModelParameters {
-  const uint8_t* program = nullptr;
-  size_t programBytes = 0u;
+  const uint8_t* programInfo = nullptr;
+  size_t programInfoBytes = 0u;
+  uint32_t dataAddress = 0u;
   uint8_t classCount = 0u;
   uint8_t silenceClass = 0u;
   uint8_t unknownClass = 0u;
@@ -71,7 +72,7 @@ bool begin();
  *
  * @param runner      Runner holding the loaded model, or nullptr to stop.
  * @param parameters  The loaded model's own metadata. Ignored when runner is
- *                    nullptr. `program` must outlive the model.
+ *                    nullptr. `programInfo` must outlive the model.
  * @return True when the model's dequantization could be read and scoring can
  *         start.
  */

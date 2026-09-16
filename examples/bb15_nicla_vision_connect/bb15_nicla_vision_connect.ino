@@ -87,14 +87,23 @@ bool prepare_board() {
 }
 
 /**
- * @brief Adopt a model the transfer module has loaded.
+ * @brief Follow the model the transfer module reports.
  *
- * @param loaded  Description of the model now on the BrainBoard.
+ * @param loaded  Description of the model now on the BrainBoard, or an invalid
+ *                one when the board has stopped having a model to run.
  */
 void on_model_loaded(const model::Loaded& loaded) {
+  if (!loaded.valid) {
+    kws::setModel(nullptr, kws::ModelParameters());
+    Serial.print(kLogPrefix);
+    Serial.println(" model cleared, the board has none to run");
+    return;
+  }
+
   kws::ModelParameters parameters;
-  parameters.program = loaded.program;
-  parameters.programBytes = loaded.programBytes;
+  parameters.programInfo = loaded.programInfo;
+  parameters.programInfoBytes = loaded.programInfoBytes;
+  parameters.dataAddress = loaded.dataAddress;
   parameters.classCount = loaded.classCount;
   parameters.silenceClass = loaded.silenceClass;
   parameters.unknownClass = loaded.unknownClass;
@@ -109,6 +118,8 @@ void on_model_loaded(const model::Loaded& loaded) {
   Serial.print(loaded.classCount);
   Serial.print(" program_bytes=");
   Serial.print(static_cast<unsigned long>(loaded.programBytes));
+  Serial.print(" program_info_bytes=");
+  Serial.print(static_cast<unsigned long>(loaded.programInfoBytes));
   Serial.print(" ready=");
   Serial.println(ready ? 1 : 0);
 }

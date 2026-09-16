@@ -12,20 +12,24 @@ constexpr size_t kMaxNameLength = 64u;
 /** @brief A model that is present in BrainBoard flash and loaded. */
 struct Loaded {
   bool valid = false;
-  const uint8_t* program = nullptr;
+  const uint8_t* programInfo = nullptr;
+  size_t programInfoBytes = 0u;
+  uint32_t dataAddress = 0u;
   size_t programBytes = 0u;
-  uint32_t dataBytes = 0u;
   uint8_t classCount = 0u;
   uint8_t silenceClass = 0u;
   uint8_t unknownClass = 0u;
-  bool edgeLearning = false;
-  uint16_t edgeClasses = 0u;
-  uint16_t neuronsPerClass = 0u;
   float mfccFullScale = 0.0f;
   char name[kMaxNameLength] = {0};
 };
 
-/** @brief Called once a model has been loaded and is ready to score with. */
+/**
+ * @brief Called whenever the model the board runs changes.
+ *
+ * It carries a valid model once one is loaded and ready to score with, and an
+ * invalid one when the board has stopped having a model to run, which happens
+ * as soon as a new transfer starts overwriting the one in flash.
+ */
 using LoadedHandler = void (*)(const Loaded& loaded);
 
 /** @brief Called when a transfer starts and when it ends, for LED feedback. */
@@ -45,7 +49,7 @@ void begin(BB15& board, BB15Runner& runner);
 /**
  * @brief Register the callbacks this module reports through.
  *
- * @param onLoaded    Called when a model becomes ready, from poll().
+ * @param onLoaded    Called when the loaded model changes, from poll().
  * @param onActivity  Called with true while a transfer is running.
  */
 void setHandlers(LoadedHandler onLoaded, ActivityHandler onActivity);
@@ -61,10 +65,10 @@ void setHandlers(LoadedHandler onLoaded, ActivityHandler onActivity);
 bool restoreFromFlash();
 
 /**
- * @brief Do the work a transfer has queued: send acks, write flash, load.
+ * @brief Do the work a transfer has queued: write flash, answer, install.
  *
- * Writing flash takes seconds, so it happens here rather than inside the
- * Bluetooth write callback that asked for it.
+ * Committing a block takes the best part of a second, so it happens here
+ * rather than inside the Bluetooth write callback that asked for it.
  */
 void poll();
 
