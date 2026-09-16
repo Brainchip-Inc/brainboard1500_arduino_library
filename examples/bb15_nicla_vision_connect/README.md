@@ -21,10 +21,12 @@ camera USB-side down.
 What differs from the USB examples is the transport and where the models come
 from.
 
-**This example is not finished.** The camera preview frame is built and its
-format is defined below, but the board does not send it yet: the format has
-still to be measured against what reads as live over this link, and the app has
-no renderer for it. Only detections go out today.
+**The live camera preview is not a working feature.** The board half is built
+and its wire format is defined below, but the board does not send it yet and
+**the app has no preview support at all**, so pressing start streaming on human
+detection shows nothing. Both halves are outstanding: the format has still to
+be measured against what reads as live over this link, and the app has to learn
+to draw it. Only detections go out today.
 
 The BrainChip Connect app is currently private and will be released soon.
 

@@ -106,7 +106,7 @@ void on_model_loaded(const model::Loaded& loaded) {
     kws::setModel(nullptr, kws::ModelParameters());
     vision::setModel(nullptr, vision::ModelParameters());
     Serial.print(kLogPrefix);
-    Serial.println(" model cleared, the board has none to run");
+    Serial.println(" nothing is in the Akida fabric now");
     return;
   }
 
@@ -176,8 +176,16 @@ void on_deploy(model::App app, bool running) {
     return;
   }
   if (!model::load(app)) {
+    // Present but unusable and simply absent are different problems, and a
+    // reader who cannot tell them apart will read a failed load as a model
+    // that has been overwritten.
     Serial.print(kLogPrefix);
-    Serial.println(" deploy refused: no model for that application");
+    Serial.print(model::installed(app).present
+                     ? " deploy failed: that model is in flash but would not "
+                       "load, and it is still there"
+                     : " deploy refused: no model has been sent for that "
+                       "application");
+    Serial.println();
     return;
   }
   if (app == model::App::Keyword) {

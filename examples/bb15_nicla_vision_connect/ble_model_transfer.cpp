@@ -663,6 +663,19 @@ void forgetLoadedModel() {
   if (!g_loaded.valid || g_loaded.app != g_session.app) {
     return;
   }
+
+  // Name the slot, and say what is not being touched. A reader watching a
+  // transfer needs to be able to tell "this application's model is being
+  // replaced" from "the board has lost its models", and only the slot being
+  // written is affected.
+  Serial.print(kLogPrefix);
+  Serial.print(" replacing the ");
+  Serial.print(appName(g_session.app));
+  Serial.print(" model; the ");
+  Serial.print(
+      appName(g_session.app == App::Keyword ? App::Vision : App::Keyword));
+  Serial.println(" slot is untouched");
+
   g_loaded = Loaded();
   if (g_on_loaded != nullptr) {
     g_on_loaded(g_loaded);

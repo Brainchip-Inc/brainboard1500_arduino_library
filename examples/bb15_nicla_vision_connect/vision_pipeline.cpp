@@ -29,8 +29,10 @@ constexpr uint16_t kModelChannels = 3u;
 constexpr size_t kModelInputBytes =
     static_cast<size_t>(kFrameWidth) * kFrameHeight * kModelChannels;
 
-// Longest an enqueued inference is waited for before the frame is abandoned.
-constexpr uint32_t kResultTimeoutMs = 250u;
+// How long an enqueued inference may go uncollected before the pipeline says
+// so. It only reports: an enqueued job is never abandoned, because the engine
+// answers the next enqueue while one is outstanding by halting the core.
+constexpr uint32_t kSlowResultMs = 1000u;
 
 // The model scores two classes, and this is the one that means a person.
 constexpr uint8_t kPersonClass = 1u;
@@ -38,12 +40,6 @@ constexpr const char* kClassLabels[] = {"no_person", "person"};
 constexpr uint8_t kClassLabelCount =
     sizeof(kClassLabels) / sizeof(kClassLabels[0]);
 constexpr uint8_t kMaxClasses = 8u;
-
-/** @brief Where the pipeline is in the grab, score, report cycle. */
-enum class Stage : uint8_t {
-  Grab,
-  AwaitResult,
-};
 
 ModelParameters g_model;
 BB15Runner* g_runner = nullptr;
@@ -62,8 +58,12 @@ uint16_t g_crop_x[kFrameWidth];
 uint16_t g_crop_y[kFrameHeight];
 bool g_crop_maps_ready = false;
 
-Stage g_stage = Stage::Grab;
-uint32_t g_result_deadline_ms = 0u;
+// True from the moment the engine is given a frame until it gives the result
+// back. The engine refuses a second enqueue while the first is outstanding by
+// halting the core, so this is never cleared without collecting the result.
+bool g_inflight = false;
+bool g_slow_reported = false;
+uint32_t g_enqueued_ms = 0u;
 bool g_running = false;
 bool g_streaming = false;
 bool g_camera_ready = false;
@@ -209,6 +209,33 @@ void softmax_in_place(float* values) {
 }
 
 /**
+ * @brief Collect the outstanding result, so the engine is left ready.
+ *
+ * Stopping the pipeline with a frame still in the engine is what the phone
+ * does every time it switches application. The job has to be collected rather
+ * than forgotten: the engine answers the next enqueue while one is
+ * outstanding by halting the core, and nothing in a sketch recovers from that.
+ *
+ * If the result never arrives the frame stays outstanding on purpose, which
+ * leaves the pipeline quiet instead of taking the board down.
+ */
+void drain_inflight() {
+  if (!g_inflight) {
+    return;
+  }
+  const uint32_t deadline = millis() + kSlowResultMs;
+  while (g_inflight && static_cast<int32_t>(millis() - deadline) < 0) {
+    if (g_runner->fetch().status != BB15Status::OutputNotReady) {
+      g_inflight = false;
+    }
+  }
+  if (g_inflight) {
+    Serial.println(
+        "[vision] the engine still holds a frame; no more will be sent");
+  }
+}
+
+/**
  * @brief Grab a frame and hand it to the model.
  *
  * @return True when an inference is now in flight.
@@ -227,7 +254,13 @@ bool start_frame() {
   input.data = g_model_input;
   input.type = akida::TensorType::uint8;
   input.dimensions = {1u, kFrameHeight, kFrameWidth, kModelChannels};
-  return g_runner->enqueue(input) == BB15Status::Ok;
+  if (g_runner->enqueue(input) != BB15Status::Ok) {
+    return false;
+  }
+  g_inflight = true;
+  g_slow_reported = false;
+  g_enqueued_ms = millis();
+  return true;
 }
 
 /**
@@ -240,6 +273,10 @@ bool finish_frame() {
   if (result.status == BB15Status::OutputNotReady) {
     return false;
   }
+
+  // The engine has given the frame back, whatever it thinks of it, so the next
+  // one may be handed over.
+  g_inflight = false;
   if (!result.ok() || result.type != akida::TensorType::int32 ||
       result.elementCount() < g_model.classCount) {
     return true;
@@ -283,7 +320,6 @@ bool setModel(BB15Runner* runner, const ModelParameters& parameters) {
   g_runner = runner;
   g_output_shifts = nullptr;
   g_output_scales = nullptr;
-  g_stage = Stage::Grab;
 
   if (runner == nullptr) {
     g_model = ModelParameters();
@@ -320,8 +356,8 @@ void setInferenceRunning(bool running) {
   }
   g_running =
       running && modelReady() && g_camera_ready && hold_capture_buffer(true);
-  g_stage = Stage::Grab;
   if (!g_running) {
+    drain_inflight();
     hold_capture_buffer(false);
   }
 }
@@ -338,7 +374,7 @@ void setHandlers(DetectionHandler onDetection, PreviewHandler onPreview) {
 void standDown() {
   g_running = false;
   g_streaming = false;
-  g_stage = Stage::Grab;
+  drain_inflight();
   hold_capture_buffer(false);
 }
 
@@ -346,22 +382,18 @@ bool poll() {
   if (!g_running) {
     return false;
   }
-
-  if (g_stage == Stage::Grab) {
-    if (!start_frame()) {
-      return false;
-    }
-    g_stage = Stage::AwaitResult;
-    g_result_deadline_ms = millis() + kResultTimeoutMs;
+  if (!g_inflight) {
+    start_frame();
     return false;
   }
 
   if (finish_frame()) {
-    g_stage = Stage::Grab;
     return true;
   }
-  if (static_cast<int32_t>(millis() - g_result_deadline_ms) >= 0) {
-    g_stage = Stage::Grab;
+  if (!g_slow_reported && static_cast<int32_t>(millis() - g_enqueued_ms) >
+                              static_cast<int32_t>(kSlowResultMs)) {
+    g_slow_reported = true;
+    Serial.println("[vision] the engine is slow to return a frame");
   }
   return false;
 }
