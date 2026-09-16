@@ -77,6 +77,12 @@ The example set is intentionally small and board-specific:
 7. `examples/bb15_nicla_vision_keyword_spotting`
    The same keyword spotting pipeline driven by the Nicla Vision's onboard PDM
    microphone. One desktop tool draws either board.
+8. `examples/bb15_nicla_vision_connect`
+   The same Nicla Vision keyword spotting pipeline driven from the BrainChip
+   Connect phone app over Bluetooth Low Energy instead of the desktop tool. Its
+   model arrives from the app and is kept in BB15 external flash rather than
+   compiled in, and must be built for the Akida engine version this library
+   carries. The app is currently private and will be released soon.
 
 All sketches are heavily commented and meant to be modified by users.
 
