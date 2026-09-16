@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 
+#include "ble_model_transfer.h"
+
 namespace protocol {
 
 /** @brief The name the board advertises and the app shows. */
@@ -18,10 +20,10 @@ extern const char kDeviceName[];
 extern const uint8_t kManufacturerData[12];
 
 /** @brief Called when the phone asks for inference to start or stop. */
-using DeployHandler = void (*)(bool running);
+using DeployHandler = void (*)(model::App app, bool running);
 
 /** @brief Called when the phone asks for the microphone stream. */
-using StreamHandler = void (*)(bool streaming);
+using StreamHandler = void (*)(model::App app, bool streaming);
 
 /** @brief Called when the phone asks the board to restart. */
 using ResetHandler = void (*)();
@@ -69,6 +71,15 @@ void sendDetection(const char* label, float confidence);
  * @param count   Number of values, which the phone reads as the mode.
  */
 void sendWaveform(const int16_t* values, uint16_t count);
+
+/**
+ * @brief Send one camera preview image, as however many frames it takes.
+ *
+ * @param pixels  8-bit grayscale pixels, top row first.
+ * @param width   Image width in pixels, at most 255.
+ * @param height  Image height in pixels, at most 255.
+ */
+void sendPreview(const uint8_t* pixels, uint8_t width, uint8_t height);
 
 /** @brief Say whether a phone is connected and subscribed. */
 bool connected();

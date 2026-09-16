@@ -8,6 +8,7 @@
 #include "ble_model_transfer.h"
 #include "device_status.h"
 #include "kws_pipeline.h"
+#include "vision_pipeline.h"
 
 namespace protocol {
 
@@ -23,11 +24,26 @@ constexpr const char* kVendor = "BrainChip";
 constexpr const char* kBluetoothVersion = "4.1";
 constexpr const char* kFirmwareVersion = "0.1.0";
 
-// What the board says about itself in the application list. The app takes the
-// first word, lowercased, as the application id, so it has to stay "Keyword".
-constexpr const char* kAppName = "Keyword Spotting";
-constexpr const char* kAppDescription =
-    "Voice-activated wake word detection using microphone input";
+/** @brief One application, as the phone lists and addresses it. */
+struct AppDescriptor {
+  model::App app;
+  // What the phone sends back in every command that names an application.
+  const char* id;
+  // The phone derives the id from the first word of this, lowercased, so the
+  // first word has to stay the id.
+  const char* name;
+  const char* description;
+  const char* inputShape;
+};
+
+constexpr AppDescriptor kApps[] = {
+    {model::App::Keyword, "keyword", "Keyword Spotting",
+     "Voice-activated wake word detection using microphone input", "49x10x1"},
+    {model::App::Vision, "vision", "Vision Human Detection",
+     "Person detection from the camera using the Akida vision model",
+     "96x96x3"},
+};
+constexpr size_t kAppDescriptorCount = sizeof(kApps) / sizeof(kApps[0]);
 
 // Frame types, which the phone uses to reassemble a multi-frame answer.
 constexpr uint8_t kFrameSingle = 0u;
@@ -51,9 +67,19 @@ constexpr int kCmdStreamStop = 11;
 constexpr const char* kAckDone = "170";
 
 // Binary waveform frames, told apart from the text ones by the first byte.
-constexpr uint8_t kWaveMagic = 0x42u;
+constexpr uint8_t kBinaryMagic = 0x42u;
 constexpr uint8_t kWaveCommand = 0x0Cu;
 constexpr size_t kWaveHeaderBytes = 6u;
+
+// The camera preview rides the same characteristic, told apart by its command
+// byte. An image needs more than one frame, so each carries the offset of its
+// own pixels and the geometry they belong to.
+constexpr uint8_t kPreviewCommand = 0x0Du;
+constexpr size_t kPreviewHeaderBytes = 10u;
+constexpr uint8_t kPreviewGrayscale = 0u;
+constexpr size_t kMaxNotificationBytes = 239u;
+constexpr size_t kPreviewChunkBytes =
+    kMaxNotificationBytes - kPreviewHeaderBytes;
 
 constexpr size_t kMaxCommandBytes = 248u;
 constexpr size_t kCommandQueueDepth = 4u;
@@ -75,6 +101,7 @@ volatile uint8_t g_queue_head = 0u;
 volatile uint8_t g_queue_tail = 0u;
 
 uint16_t g_wave_sequence = 0u;
+uint16_t g_preview_sequence = 0u;
 
 /** @brief One tunable the phone can read and write, and how it is carried. */
 struct ConfigParameter {
@@ -159,41 +186,79 @@ void sendDeviceInfo() {
   sendBurst(kCmdDeviceInfo, values, 5u);
 }
 
-/** @brief Answer the application list command. */
-void sendApps() {
-  const model::Loaded& loadedModel = model::loaded();
-  char sizeKb[16];
-  snprintf(sizeKb, sizeof(sizeKb), "%lu",
-           static_cast<unsigned long>(loadedModel.programBytes / 1024u));
-  const char* values[] = {kAppName, kAppDescription, sizeKb};
-  sendBurst(kCmdApps, values, 3u);
+/**
+ * @brief Find the application one command names.
+ *
+ * @param payload  Body after the opcode, whose first field is the identifier.
+ * @return The application, or nullptr when the phone named one this board
+ *         does not carry.
+ */
+const AppDescriptor* appFromPayload(const char* payload) {
+  const char* end = strchr(payload, ',');
+  const size_t length =
+      end != nullptr ? static_cast<size_t>(end - payload) : strlen(payload);
+  for (size_t index = 0u; index < kAppDescriptorCount; ++index) {
+    if (strlen(kApps[index].id) == length &&
+        strncmp(kApps[index].id, payload, length) == 0) {
+      return &kApps[index];
+    }
+  }
+  return nullptr;
 }
 
-/** @brief Answer the application detail command with the loaded model. */
-void sendAppInfo() {
-  const model::Loaded& loadedModel = model::loaded();
+/** @brief The label for one class of one application's model. */
+const char* classLabel(model::App app, uint8_t classIndex) {
+  return app == model::App::Keyword ? kws::classLabel(classIndex)
+                                    : vision::classLabel(classIndex);
+}
 
-  char inputShape[32];
-  snprintf(inputShape, sizeof(inputShape), "49x10x1");
+/**
+ * @brief Answer the application list command, once per installed model.
+ *
+ * Each application is a burst of its own, which the phone adds to its list
+ * separately and then asks about in turn.
+ */
+void sendApps() {
+  for (size_t index = 0u; index < kAppDescriptorCount; ++index) {
+    const model::Installed& installed = model::installed(kApps[index].app);
+    if (!installed.present) {
+      continue;
+    }
+    char sizeKb[16];
+    snprintf(sizeKb, sizeof(sizeKb), "%lu",
+             static_cast<unsigned long>(installed.programBytes / 1024u));
+    const char* values[] = {kApps[index].name, kApps[index].description,
+                            sizeKb};
+    sendBurst(kCmdApps, values, 3u);
+  }
+}
+
+/**
+ * @brief Answer the application detail command for one application.
+ *
+ * @param descriptor  Application the phone asked about.
+ */
+void sendAppInfo(const AppDescriptor& descriptor) {
+  const model::Installed& installed = model::installed(descriptor.app);
 
   char classes[8];
   snprintf(classes, sizeof(classes), "%u",
-           static_cast<unsigned>(loadedModel.classCount));
+           static_cast<unsigned>(installed.classCount));
 
-  char keywords[128] = {0};
-  for (uint8_t index = 0u; index < loadedModel.classCount; ++index) {
-    if (index == loadedModel.silenceClass ||
-        index == loadedModel.unknownClass) {
+  char labels[128] = {0};
+  for (uint8_t index = 0u; index < installed.classCount; ++index) {
+    if (index == installed.silenceClass || index == installed.unknownClass) {
       continue;
     }
-    if (keywords[0] != '\0') {
-      strncat(keywords, ";", sizeof(keywords) - strlen(keywords) - 1u);
+    if (labels[0] != '\0') {
+      strncat(labels, ";", sizeof(labels) - strlen(labels) - 1u);
     }
-    strncat(keywords, kws::classLabel(index),
-            sizeof(keywords) - strlen(keywords) - 1u);
+    strncat(labels, classLabel(descriptor.app, index),
+            sizeof(labels) - strlen(labels) - 1u);
   }
 
-  const char* values[] = {loadedModel.name, inputShape, classes, keywords};
+  const char* values[] = {installed.name, descriptor.inputShape, classes,
+                          labels};
   sendBurst(kCmdAppInfo, values, 4u);
 }
 
@@ -366,15 +431,15 @@ void handleCommand(char* command) {
       sendDeviceInfo();
       break;
     case kCmdApps:
-      if (model::loaded().valid) {
-        sendApps();
+      sendApps();
+      break;
+    case kCmdAppInfo: {
+      const AppDescriptor* descriptor = appFromPayload(payload);
+      if (descriptor != nullptr && model::installed(descriptor->app).present) {
+        sendAppInfo(*descriptor);
       }
       break;
-    case kCmdAppInfo:
-      if (model::loaded().valid) {
-        sendAppInfo();
-      }
-      break;
+    }
     case kCmdConfig:
       handleConfig(payload);
       break;
@@ -383,28 +448,42 @@ void handleCommand(char* command) {
         g_on_reset();
       }
       break;
-    case kCmdDeployStart:
+    case kCmdDeployStart: {
+      const AppDescriptor* descriptor = appFromPayload(payload);
+      if (descriptor == nullptr) {
+        break;
+      }
       if (g_on_deploy != nullptr) {
-        g_on_deploy(true);
+        g_on_deploy(descriptor->app, true);
       }
       sendSingle(kCmdDeployStart, kAckDone);
       break;
-    case kCmdDeployStop:
+    }
+    case kCmdDeployStop: {
+      const AppDescriptor* descriptor = appFromPayload(payload);
+      if (descriptor == nullptr) {
+        break;
+      }
       if (g_on_deploy != nullptr) {
-        g_on_deploy(false);
+        g_on_deploy(descriptor->app, false);
       }
       sendSingle(kCmdDeployStop, kAckDone);
       break;
-    case kCmdStreamStart:
-      if (g_on_stream != nullptr) {
-        g_on_stream(true);
+    }
+    case kCmdStreamStart: {
+      const AppDescriptor* descriptor = appFromPayload(payload);
+      if (descriptor != nullptr && g_on_stream != nullptr) {
+        g_on_stream(descriptor->app, true);
       }
       break;
-    case kCmdStreamStop:
-      if (g_on_stream != nullptr) {
-        g_on_stream(false);
+    }
+    case kCmdStreamStop: {
+      const AppDescriptor* descriptor = appFromPayload(payload);
+      if (descriptor != nullptr && g_on_stream != nullptr) {
+        g_on_stream(descriptor->app, false);
       }
       break;
+    }
     default:
       break;
   }
@@ -460,9 +539,33 @@ void sendDetection(const char* label, float confidence) {
   sendSingle(kCmdDeployStart, value);
 }
 
+void sendPreview(const uint8_t* pixels, uint8_t width, uint8_t height) {
+  const size_t total = static_cast<size_t>(width) * height;
+  uint8_t frame[kPreviewHeaderBytes + kPreviewChunkBytes];
+  frame[0] = kBinaryMagic;
+  frame[1] = kPreviewCommand;
+  frame[2] = static_cast<uint8_t>(g_preview_sequence & 0xFFu);
+  frame[3] = static_cast<uint8_t>((g_preview_sequence >> 8) & 0xFFu);
+  frame[6] = width;
+  frame[7] = height;
+  frame[8] = kPreviewGrayscale;
+  frame[9] = 0u;
+  ++g_preview_sequence;
+
+  for (size_t offset = 0u; offset < total; offset += kPreviewChunkBytes) {
+    const size_t chunk = total - offset < kPreviewChunkBytes
+                             ? total - offset
+                             : kPreviewChunkBytes;
+    frame[4] = static_cast<uint8_t>(offset & 0xFFu);
+    frame[5] = static_cast<uint8_t>((offset >> 8) & 0xFFu);
+    memcpy(&frame[kPreviewHeaderBytes], pixels + offset, chunk);
+    g_tx.writeValue(frame, static_cast<int>(kPreviewHeaderBytes + chunk));
+  }
+}
+
 void sendWaveform(const int16_t* values, uint16_t count) {
   uint8_t frame[kWaveHeaderBytes + kws::kWaveformValues * sizeof(int16_t)];
-  frame[0] = kWaveMagic;
+  frame[0] = kBinaryMagic;
   frame[1] = kWaveCommand;
   frame[2] = static_cast<uint8_t>(g_wave_sequence & 0xFFu);
   frame[3] = static_cast<uint8_t>((g_wave_sequence >> 8) & 0xFFu);

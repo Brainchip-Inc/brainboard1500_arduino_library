@@ -1,30 +1,63 @@
-# Nicla Vision Keyword Spotting over Bluetooth
+# Nicla Vision Keyword Spotting and Human Detection over Bluetooth
 
-This Nicla Vision-only example runs keyword spotting driven entirely from the
+This Nicla Vision-only example runs two demos driven entirely from the
 BrainChip Connect phone app over Bluetooth Low Energy, instead of from the
 desktop tool over USB. It advertises as `BrainBoard1500`, answers the app's
-commands, receives its model from the app, and reports detections back.
+commands, receives both models from the app, and reports detections back.
 
-It recognises ten keywords: `down`, `go`, `left`, `no`, `off`, `on`, `right`,
-`stop`, `up`, `yes`. The model also reports `silence` and `unknown`, which are
-scored but can never trigger a detection.
+**Keyword Spotting** recognises ten keywords: `down`, `go`, `left`, `no`,
+`off`, `on`, `right`, `stop`, `up`, `yes`. The model also reports `silence` and
+`unknown`, which are scored but can never trigger a detection. The audio
+pipeline is the USB keyword spotting example's, value for value: the same DC
+blocker, 960-sample blocks, RMS speech gate, MFCC front end, spectrogram ring,
+inference period, smoothing, debounce and chiming.
 
-The audio pipeline is the USB keyword spotting example's, value for value: the
-same DC blocker, 960-sample blocks, RMS speech gate, MFCC front end,
-spectrogram ring, inference period, smoothing, debounce and chiming. What
-differs is the transport and where the model comes from.
+**Vision Human Detection** scores a 96x96 crop of the camera against the visual
+wake words model and reports `person` or `no_person` for every frame, at about
+15 frames a second. The crop is the widest centred square of a 320x240 capture,
+sampled down and rotated half a turn, because the model was trained with the
+camera USB-side down.
+
+What differs from the USB examples is the transport and where the models come
+from.
+
+**This example is not finished.** The camera preview frame is built and its
+format is defined below, but the board does not send it yet: the format has
+still to be measured against what reads as live over this link, and the app has
+no renderer for it. Only detections go out today.
 
 The BrainChip Connect app is currently private and will be released soon.
 
-## The model this example needs
+## The models this example needs
 
 **No model is compiled into this sketch and none is committed here.** The app
-sends one over Bluetooth as a `.zip`, and the board writes it into BB15
-external flash and loads it from there. The model survives a power cycle and a
+sends each one over Bluetooth as a `.zip`, and the board writes it into BB15
+external flash and loads it from there. A model survives a power cycle and a
 firmware update, so it only has to be sent once.
 
 The archive must hold `info.yaml` and a `<name>_program_info.bin` /
 `<name>_program_data.bin` pair, which is the shape the app already reads.
+
+Each application has its own 512 kB slot in external flash, so installing one
+model leaves the other alone. **Which slot a transfer lands in is decided by
+the input shape in `info.yaml`**, which the app writes before it sends any
+bytes:
+
+| `input_shape` | application | slot |
+| --- | --- | --- |
+| `[49, 10, 1]` | Keyword Spotting | 0 |
+| `[96, 96, 3]` | Vision Human Detection | 1 |
+
+Nothing else the app sends names the application, and the shape is the property
+that settles which pipeline can feed the model. A model whose shape matches
+neither is refused as soon as its program info has arrived, before any of the
+model data is sent. `flash_address` is an offset within the slot, so both
+applications use the same `0x1000`.
+
+Only one program fits in the Akida fabric, so nothing is loaded until the app
+asks for an application to run. Starting one is therefore a model swap, which
+takes about 1.9 seconds for either model and is inside the 3 second window the
+app allows.
 
 **The model must be built for the Akida engine this library carries, which is
 2.5.0.** A model built for another engine version is refused: the serialized
@@ -120,9 +153,9 @@ arduino-cli upload --fqbn arduino:mbed_nicla:nicla_vision --port /dev/cu.usbmode
 ```
 
 Then open the app, pick `BrainBoard1500` from the device list, connect, and
-send a model from the Model Update screen. Once the model is installed the
-Keyword Spotting application appears on the home screen; Run Application starts
-the detector.
+send a model from the Model Update screen. Each model that arrives adds its
+application to the home screen, so send both to get both; Run Application
+starts whichever one you pick.
 
 The serial port carries a short log of what the board is doing, at 115200 baud.
 It is not needed to run the demo. Each boot opens with `previous_run=`, which
@@ -140,7 +173,7 @@ The RGB LED is driven directly and is active low.
 | Blue, one short flash every two seconds | advertising, no phone connected |
 | Green, steady | a phone is connected |
 | Blue, fast blink | a model transfer is running |
-| Red, one short flash | a keyword was detected |
+| Red, one short flash | a keyword was detected, or a person was seen |
 | Red, slow blink | setup failed; the serial log says at which stage |
 
 ## Battery
@@ -153,6 +186,31 @@ Whether a cell is fitted at all cannot be read on this board while it runs from
 USB: the gauge sits on the system rail, so with no cell it reports that rail as
 a full, healthy battery and its battery-present bit agrees. A board on USB with
 no cell therefore reads as a charged one.
+
+## The camera preview frame
+
+Defined here so the app can be built against it, though the board does not send
+it yet. Preview frames ride the same notify characteristic as the microphone
+waveform, `6e400003-b5a3-f393-e0a9-e50e24dcca9e`, and are told apart from the
+text frames by the first byte and from the waveform by the second.
+
+| offset | size | field |
+| --- | --- | --- |
+| 0 | 1 | magic, `0x42` |
+| 1 | 1 | command, `0x0D` for a preview |
+| 2 | 2 | uint16 LE image sequence, one per image |
+| 4 | 2 | uint16 LE byte offset of this chunk within the image |
+| 6 | 1 | image width in pixels |
+| 7 | 1 | image height in pixels |
+| 8 | 1 | pixel format, `0` for 8-bit grayscale |
+| 9 | 1 | reserved, zero |
+| 10 | .. | pixels, up to 229 of them |
+
+Every chunk carries the geometry, so a reader needs no state beyond the image
+it is assembling: start a new image of `width * height` bytes when the sequence
+changes, write each chunk at its own offset, and render when it is full. An
+image whose sequence is superseded before it fills should be dropped rather
+than held, because the board always sends the newest frame and never queues.
 
 ## What the app cannot do against this board
 

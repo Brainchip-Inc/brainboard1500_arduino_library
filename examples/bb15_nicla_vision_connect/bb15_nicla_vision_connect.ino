@@ -7,6 +7,7 @@
 #include "ble_protocol.h"
 #include "device_status.h"
 #include "kws_pipeline.h"
+#include "vision_pipeline.h"
 
 #ifndef ARDUINO_NICLA_VISION
 #error "bb15_nicla_vision_connect requires Arduino Nicla Vision."
@@ -86,6 +87,14 @@ bool prepare_board() {
   return board.begin() == BB15Status::Ok && runner.begin() == BB15Status::Ok;
 }
 
+/** @brief Stop both demos, whatever either was doing. */
+void stop_pipelines() {
+  kws::setInferenceRunning(false);
+  kws::setWaveformStreaming(false);
+  vision::setInferenceRunning(false);
+  vision::setPreviewStreaming(false);
+}
+
 /**
  * @brief Follow the model the transfer module reports.
  *
@@ -95,21 +104,33 @@ bool prepare_board() {
 void on_model_loaded(const model::Loaded& loaded) {
   if (!loaded.valid) {
     kws::setModel(nullptr, kws::ModelParameters());
+    vision::setModel(nullptr, vision::ModelParameters());
     Serial.print(kLogPrefix);
     Serial.println(" model cleared, the board has none to run");
     return;
   }
 
-  kws::ModelParameters parameters;
-  parameters.programInfo = loaded.programInfo;
-  parameters.programInfoBytes = loaded.programInfoBytes;
-  parameters.dataAddress = loaded.dataAddress;
-  parameters.classCount = loaded.classCount;
-  parameters.silenceClass = loaded.silenceClass;
-  parameters.unknownClass = loaded.unknownClass;
-  parameters.mfccFullScale = loaded.mfccFullScale;
-
-  const bool ready = kws::setModel(g_runner, parameters);
+  bool ready = false;
+  if (loaded.app == model::App::Keyword) {
+    kws::ModelParameters parameters;
+    parameters.programInfo = loaded.programInfo;
+    parameters.programInfoBytes = loaded.programInfoBytes;
+    parameters.dataAddress = loaded.dataAddress;
+    parameters.classCount = loaded.classCount;
+    parameters.silenceClass = loaded.silenceClass;
+    parameters.unknownClass = loaded.unknownClass;
+    parameters.mfccFullScale = loaded.mfccFullScale;
+    ready = kws::setModel(g_runner, parameters);
+    vision::setModel(nullptr, vision::ModelParameters());
+  } else {
+    vision::ModelParameters parameters;
+    parameters.programInfo = loaded.programInfo;
+    parameters.programInfoBytes = loaded.programInfoBytes;
+    parameters.dataAddress = loaded.dataAddress;
+    parameters.classCount = loaded.classCount;
+    ready = vision::setModel(g_runner, parameters);
+    kws::setModel(nullptr, kws::ModelParameters());
+  }
 
   Serial.print(kLogPrefix);
   Serial.print(" model=");
@@ -131,7 +152,8 @@ void on_model_loaded(const model::Loaded& loaded) {
  */
 void on_transfer_activity(bool busy) {
   if (busy) {
-    kws::setInferenceRunning(false);
+    stop_pipelines();
+    vision::standDown();
     device::setLedMode(device::LedMode::ModelTransfer);
     return;
   }
@@ -140,18 +162,44 @@ void on_transfer_activity(bool busy) {
 }
 
 /**
- * @brief Start or stop scoring audio.
+ * @brief Start or stop one application.
  *
- * @param running  True to run the detector.
+ * Only one program fits in the Akida fabric, so starting an application that
+ * is not the loaded one is a model swap.
+ *
+ * @param app      Application the phone named.
+ * @param running  True to start it, false to stop it.
  */
-void on_deploy(bool running) { kws::setInferenceRunning(running); }
+void on_deploy(model::App app, bool running) {
+  stop_pipelines();
+  if (!running) {
+    return;
+  }
+  if (!model::load(app)) {
+    Serial.print(kLogPrefix);
+    Serial.println(" deploy refused: no model for that application");
+    return;
+  }
+  if (app == model::App::Keyword) {
+    kws::setInferenceRunning(true);
+  } else {
+    vision::setInferenceRunning(true);
+  }
+}
 
 /**
- * @brief Start or stop the waveform stream.
+ * @brief Open or close one application's live stream.
  *
- * @param streaming  True to send the microphone envelope.
+ * @param app        Application the phone named.
+ * @param streaming  True to send it, false to stop.
  */
-void on_stream(bool streaming) { kws::setWaveformStreaming(streaming); }
+void on_stream(model::App app, bool streaming) {
+  if (app == model::App::Keyword) {
+    kws::setWaveformStreaming(streaming);
+  } else {
+    vision::setPreviewStreaming(streaming);
+  }
+}
 
 /** @brief Restart the board, as the phone's reset command asks. */
 void on_reset() {
@@ -182,6 +230,32 @@ void on_detection(const kws::Detection& detection) {
   Serial.println(kws::classLabel(detection.classIndex));
 }
 
+/**
+ * @brief Report what the vision model saw in one frame.
+ *
+ * Every frame is reported, so the phone's reading tracks the camera rather
+ * than only changing when a person appears. The LED marks a person, which is
+ * what it already does for a keyword.
+ *
+ * @param detection  Class and score the pipeline decided on.
+ */
+void on_person(const vision::Detection& detection) {
+  if (detection.person) {
+    device::flashDetection();
+  }
+  protocol::sendDetection(vision::classLabel(detection.classIndex),
+                          detection.confidence);
+}
+
+/**
+ * @brief Send the image the vision model just scored.
+ *
+ * @param pixels  The model's own input, in grayscale.
+ */
+void on_preview(const uint8_t* pixels) {
+  protocol::sendPreview(pixels, vision::kFrameWidth, vision::kFrameHeight);
+}
+
 /** @brief Follow the connection on the LED and stop work on a disconnect. */
 void track_connection() {
   const bool connected = BLE.connected();
@@ -197,8 +271,8 @@ void track_connection() {
     return;
   }
 
-  kws::setInferenceRunning(false);
-  kws::setWaveformStreaming(false);
+  stop_pipelines();
+  vision::standDown();
   device::setLedMode(device::LedMode::Advertising);
   Serial.print(kLogPrefix);
   Serial.println(" disconnected");
@@ -250,6 +324,14 @@ void setup() {
   }
   kws::setHandlers(on_waveform, on_detection);
 
+  if (!vision::begin()) {
+    device::setLedMode(device::LedMode::Failed);
+    Serial.print(kLogPrefix);
+    Serial.println(" result=FAIL stage=camera");
+    return;
+  }
+  vision::setHandlers(on_person, on_preview);
+
   if (!BLE.begin()) {
     device::setLedMode(device::LedMode::Failed);
     Serial.print(kLogPrefix);
@@ -267,7 +349,7 @@ void setup() {
     return;
   }
 
-  if (!model::restoreFromFlash()) {
+  if (model::readInstalled() == 0u) {
     Serial.print(kLogPrefix);
     Serial.println(" no model in flash, waiting for one over bluetooth");
   }
@@ -289,5 +371,6 @@ void loop() {
 
   if (!model::transferInProgress()) {
     kws::poll();
+    vision::poll();
   }
 }

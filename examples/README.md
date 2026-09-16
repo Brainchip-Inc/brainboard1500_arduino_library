@@ -31,6 +31,11 @@ Vision and Arduino Nicla Voice.
   The same keyword spotting demo driven by the Nicla Vision's onboard PDM
   microphone instead. Both are drawn by `tools/bb15_kws_gui.py`.
 
+- `bb15_nicla_vision_connect`
+  Keyword spotting and camera person detection on Nicla Vision, driven from the
+  BrainChip Connect phone app over Bluetooth instead of from a desktop tool.
+  Both models arrive over Bluetooth and neither is committed.
+
 ## Nicla Vision Human Detection
 
 Upload `bb15_model_flasher_nicla_vision` first to install the bundled VWW

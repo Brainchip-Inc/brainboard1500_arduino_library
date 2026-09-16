@@ -9,9 +9,29 @@ namespace model {
 /** @brief Longest model name the phone app's metadata carries. */
 constexpr size_t kMaxNameLength = 64u;
 
+/** @brief The demos this firmware carries, one model slot each. */
+enum class App : uint8_t {
+  Keyword = 0,
+  Vision = 1,
+};
+
+/** @brief Number of slots, which is the number of demos. */
+constexpr size_t kAppCount = 2u;
+
+/** @brief What one slot holds, as the application list needs to describe it. */
+struct Installed {
+  bool present = false;
+  size_t programBytes = 0u;
+  uint8_t classCount = 0u;
+  uint8_t silenceClass = 0u;
+  uint8_t unknownClass = 0u;
+  char name[kMaxNameLength] = {0};
+};
+
 /** @brief A model that is present in BrainBoard flash and loaded. */
 struct Loaded {
   bool valid = false;
+  App app = App::Keyword;
   const uint8_t* programInfo = nullptr;
   size_t programInfoBytes = 0u;
   uint32_t dataAddress = 0u;
@@ -55,14 +75,31 @@ void begin(BB15& board, BB15Runner& runner);
 void setHandlers(LoadedHandler onLoaded, ActivityHandler onActivity);
 
 /**
- * @brief Load the model left in BrainBoard flash by an earlier session.
+ * @brief Read what every slot holds, without loading anything.
  *
- * Reads the record written beside the model data and loads what it describes,
- * so a power cycle does not cost the user another transfer.
+ * Only the record at the head of each slot is read, which is what the phone
+ * needs to list the applications. Nothing reaches the Akida fabric until the
+ * phone asks for an application to run, because only one program fits in it.
  *
- * @return True when a valid record was found and its model loaded.
+ * @return Number of slots holding a model.
  */
-bool restoreFromFlash();
+size_t readInstalled();
+
+/** @brief What one slot holds, whose `present` says whether it holds anything.
+ */
+const Installed& installed(App app);
+
+/**
+ * @brief Put one slot's model into the Akida fabric, and prove it runs.
+ *
+ * Only one program fits in the fabric, so this replaces whatever was loaded.
+ * Only the program info is read into memory; the engine reads the data half
+ * out of flash itself.
+ *
+ * @param app  Slot to load from.
+ * @return True when that slot's model is loaded and has scored something.
+ */
+bool load(App app);
 
 /**
  * @brief Do the work a transfer has queued: write flash, answer, install.

@@ -12,11 +12,9 @@
 namespace model {
 namespace {
 
-// One slot per application in the BrainBoard's external model window. Only the
-// keyword slot is used today; a second application takes the next slot without
-// disturbing this one.
+// One slot per application in the BrainBoard's external model window, so
+// installing one application's model leaves the other's untouched.
 constexpr uint32_t kModelSlotBytes = 0x80000u;
-constexpr uint32_t kKeywordSlotOffset = 0u;
 
 // The slot opens with one flash sector describing what follows, so the record
 // sits at a fixed address and the model data stays sector aligned behind it.
@@ -67,6 +65,12 @@ constexpr size_t kOffsetBytes = 4u;
 
 constexpr size_t kMaxDataWriteBytes = 244u;
 constexpr size_t kMaxShapeDimensions = 3u;
+
+// The input shape the phone sends before the bytes is what says which
+// application a model belongs to, because it is the property that decides
+// which pipeline can feed it.
+constexpr uint32_t kKeywordInputShape[kMaxShapeDimensions] = {49u, 10u, 1u};
+constexpr uint32_t kVisionInputShape[kMaxShapeDimensions] = {96u, 96u, 3u};
 
 constexpr const char* kLogPrefix = "[bb15_nicla_vision_connect]";
 
@@ -143,6 +147,7 @@ constexpr size_t kMaxInfoBytes = kRecordBytes - sizeof(Record);
 
 /** @brief What the phone has told us about the model it is sending. */
 struct Session {
+  App app = App::Keyword;
   uint32_t totalLength = 0u;
   uint32_t infoLength = 0u;
   uint32_t dataLength = 0u;
@@ -188,6 +193,7 @@ ActivityHandler g_on_activity = nullptr;
 Session g_session;
 Transfer g_transfer;
 Record g_record = {};
+Installed g_installed[kAppCount];
 
 // One block of the model in flight, held only until it reaches flash.
 std::unique_ptr<uint8_t[]> g_block;
@@ -352,15 +358,60 @@ uint32_t shapeVolume(const uint32_t* shape) {
   return volume;
 }
 
-/** @brief Address of the record that opens the keyword slot. */
-uint32_t recordAddress() {
-  return AkidaNicla::externalModelAddressFromOffset(kKeywordSlotOffset);
+/** @brief Offset of one application's slot in the model window. */
+uint32_t slotOffset(App app) {
+  return static_cast<uint32_t>(app) * kModelSlotBytes;
+}
+
+/**
+ * @brief Address of the record that opens one application's slot.
+ *
+ * @param app  Application whose slot is wanted.
+ * @return The address the record is written to and read from.
+ */
+uint32_t recordAddress(App app) {
+  return AkidaNicla::externalModelAddressFromOffset(slotOffset(app));
 }
 
 /** @brief Address the model data of the transfer in flight is written to. */
 uint32_t transferDataAddress() {
-  return AkidaNicla::externalModelAddressFromOffset(kKeywordSlotOffset +
+  return AkidaNicla::externalModelAddressFromOffset(slotOffset(g_session.app) +
                                                     g_session.flashOffset);
+}
+
+/**
+ * @brief Decide which application an incoming model belongs to.
+ *
+ * The phone writes the model's input shape before it sends any bytes, and
+ * that is what decides: nothing else it sends names the application, and the
+ * shape is the property that settles which pipeline can feed the model. A
+ * shape neither pipeline produces is refused rather than guessed at, because
+ * a model the engine cannot use halts the core.
+ *
+ * @param shape  Three input dimensions as the phone sent them.
+ * @param app    Receives the application, untouched when there is no match.
+ * @return True when the shape names an application this firmware runs.
+ */
+bool appForInputShape(const uint32_t* shape, App* app) {
+  if (memcmp(shape, kKeywordInputShape, sizeof(kKeywordInputShape)) == 0) {
+    *app = App::Keyword;
+    return true;
+  }
+  if (memcmp(shape, kVisionInputShape, sizeof(kVisionInputShape)) == 0) {
+    *app = App::Vision;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Name of one application, for the log.
+ *
+ * @param app  Application to name.
+ * @return A short lower-case name.
+ */
+const char* appName(App app) {
+  return app == App::Keyword ? "keyword" : "vision";
 }
 
 /** @brief Take the model name from the filesystem path the phone wrote. */
@@ -474,6 +525,24 @@ Loaded describe(const uint8_t* programInfo) {
   described.name[kMaxNameLength - 1u] = '\0';
   described.valid = true;
   return described;
+}
+
+/**
+ * @brief Summarize a record for the application list.
+ *
+ * @param record  Record read out of a slot.
+ * @return What the phone needs to be told about that slot.
+ */
+Installed summarize(const Record& record) {
+  Installed summary;
+  summary.programBytes = record.infoLength + record.dataLength;
+  summary.classCount = static_cast<uint8_t>(shapeVolume(record.outputShape));
+  summary.silenceClass = static_cast<uint8_t>(record.silenceClass);
+  summary.unknownClass = static_cast<uint8_t>(record.unknownClass);
+  memcpy(summary.name, record.name, kMaxNameLength);
+  summary.name[kMaxNameLength - 1u] = '\0';
+  summary.present = true;
+  return summary;
 }
 
 /** @brief The CRC covering everything in the record past its own CRC field. */
@@ -591,7 +660,7 @@ void refuse(uint8_t result) {
  * so rather than running a model that is no longer there.
  */
 void forgetLoadedModel() {
-  if (!g_loaded.valid) {
+  if (!g_loaded.valid || g_loaded.app != g_session.app) {
     return;
   }
   g_loaded = Loaded();
@@ -835,7 +904,7 @@ void armDataTransfer() {
 
   BridgeHold bridge(*g_board);
   if (!bridge.held() ||
-      !g_board->eraseExternalData(recordAddress(), kRecordBytes)) {
+      !g_board->eraseExternalData(recordAddress(g_session.app), kRecordBytes)) {
     refuse(kResultErrFlash);
     return;
   }
@@ -866,6 +935,22 @@ void completeInfoTransfer() {
     refuse(kResultErrParam);
     return;
   }
+  // The slot is settled here, before any of the data half arrives, so a model
+  // no pipeline can feed is refused while it is still cheap to refuse.
+  if (!appForInputShape(g_session.inputShape, &g_session.app)) {
+    Serial.print(kLogPrefix);
+    Serial.print(" model refused: no application takes input shape ");
+    Serial.print(static_cast<unsigned long>(g_session.inputShape[0]));
+    Serial.print("x");
+    Serial.print(static_cast<unsigned long>(g_session.inputShape[1]));
+    Serial.print("x");
+    Serial.println(static_cast<unsigned long>(g_session.inputShape[2]));
+    refuse(kResultErrParam);
+    return;
+  }
+  Serial.print(kLogPrefix);
+  Serial.print(" transfer app=");
+  Serial.println(appName(g_session.app));
 
   g_incoming_info.reset(new uint8_t[g_transfer.total]);
   if (g_incoming_info == nullptr) {
@@ -940,8 +1025,9 @@ bool storeRecord() {
   memcpy(g_block.get() + sizeof(Record), g_incoming_info.get(),
          g_session.infoLength);
   const size_t used = sizeof(Record) + g_session.infoLength;
-  return g_board->eraseExternalData(recordAddress(), kRecordBytes) &&
-         g_board->writeExternalData(recordAddress(), g_block.get(), used);
+  const uint32_t address = recordAddress(g_session.app);
+  return g_board->eraseExternalData(address, kRecordBytes) &&
+         g_board->writeExternalData(address, g_block.get(), used);
 }
 
 /**
@@ -1075,6 +1161,8 @@ void installStoredModel() {
   }
 
   g_loaded = describe(g_loaded_info.get());
+  g_loaded.app = g_session.app;
+  g_installed[static_cast<size_t>(g_session.app)] = summarize(g_record);
   queueStatus(kResultReady, g_transfer.total);
   endSession();
   if (g_on_loaded != nullptr) {
@@ -1083,26 +1171,60 @@ void installStoredModel() {
 }
 
 /**
+ * @brief Say why a slot is being treated as empty, when it is not erased.
+ *
+ * An erased slot is the ordinary case and says nothing. A slot that carries a
+ * record this firmware cannot read is not ordinary: it means a model is in
+ * flash that the board is about to ignore, and the commonest reason is a
+ * record an older firmware wrote. Saying which it is turns a silently missing
+ * application into something a reader can act on.
+ *
+ * @param app     Slot that was read.
+ * @param record  What was read from the head of it.
+ */
+void reportUnusableRecord(App app, const Record& record) {
+  if (memcmp(record.magic, "BB15", 4) != 0) {
+    return;
+  }
+
+  Serial.print(kLogPrefix);
+  Serial.print(" slot app=");
+  Serial.print(appName(app));
+  if (record.version != kRecordVersion) {
+    Serial.print(" ignored: record version ");
+    Serial.print(static_cast<unsigned long>(record.version));
+    Serial.print(", this firmware writes ");
+    Serial.print(static_cast<unsigned long>(kRecordVersion));
+    Serial.println(". Send the model again to replace it.");
+    return;
+  }
+  Serial.println(" ignored: the record is damaged. Send the model again.");
+}
+
+/**
  * @brief Read the installed model's record and program info out of the slot.
  *
  * The bridge has to be taken over for the read: the memory mapped path the
  * board uses otherwise is not up on a cold boot, and the read simply fails.
  *
+ * @param app          Slot to read.
  * @param programInfo  Receives the program info half.
  * @return True when a usable record and its program info were read.
  */
-bool readInstalledModel(std::unique_ptr<uint8_t[]>* programInfo) {
+bool readInstalledModel(App app, std::unique_ptr<uint8_t[]>* programInfo) {
   BridgeHold bridge(*g_board);
   if (!bridge.held()) {
     return false;
   }
 
   std::unique_ptr<uint8_t[]> sector(new uint8_t[kRecordBytes]);
-  if (!g_board->readExternalData(recordAddress(), sector.get(), kRecordBytes)) {
+  if (!g_board->readExternalData(recordAddress(app), sector.get(),
+                                 kRecordBytes)) {
     return false;
   }
   memcpy(&g_record, sector.get(), sizeof(Record));
   if (!recordUsable(g_record)) {
+    reportUnusableRecord(app, g_record);
     return false;
   }
 
@@ -1200,9 +1322,46 @@ void setHandlers(LoadedHandler onLoaded, ActivityHandler onActivity) {
   g_on_activity = onActivity;
 }
 
-bool restoreFromFlash() {
+size_t readInstalled() {
+  size_t found = 0u;
+  for (size_t index = 0u; index < kAppCount; ++index) {
+    const App app = static_cast<App>(index);
+    std::unique_ptr<uint8_t[]> programInfo;
+    g_installed[index] = Installed();
+    if (!readInstalledModel(app, &programInfo)) {
+      continue;
+    }
+    g_installed[index] = summarize(g_record);
+    ++found;
+
+    Serial.print(kLogPrefix);
+    Serial.print(" slot app=");
+    Serial.print(appName(app));
+    Serial.print(" model=");
+    Serial.print(g_installed[index].name);
+    Serial.print(" classes=");
+    Serial.print(g_installed[index].classCount);
+    Serial.print(" program_bytes=");
+    Serial.println(static_cast<unsigned long>(g_installed[index].programBytes));
+  }
+  return found;
+}
+
+const Installed& installed(App app) {
+  return g_installed[static_cast<size_t>(app)];
+}
+
+bool load(App app) {
+  if (g_loaded.valid && g_loaded.app == app) {
+    return true;
+  }
+  if (!g_installed[static_cast<size_t>(app)].present) {
+    return false;
+  }
+
+  const uint32_t started = millis();
   std::unique_ptr<uint8_t[]> programInfo;
-  if (!readInstalledModel(&programInfo)) {
+  if (!readInstalledModel(app, &programInfo)) {
     return false;
   }
   if (!programInfoAcceptable(programInfo.get(), g_record.infoLength)) {
@@ -1211,13 +1370,31 @@ bool restoreFromFlash() {
     return false;
   }
 
-  const bool ready = loadModelFromFlash(programInfo.get(), g_record.infoLength);
+  // The outgoing model goes first: the engine holds a pointer into the info
+  // blob it was last programmed from, so that has to outlive the swap.
+  g_loaded = Loaded();
+  const bool ready =
+      loadModelFromFlash(programInfo.get(), g_record.infoLength) &&
+      modelInfers();
   g_loaded_info = std::move(programInfo);
   if (!ready) {
+    Serial.print(kLogPrefix);
+    Serial.print(" load failed app=");
+    Serial.print(appName(app));
+    Serial.print(" detail=");
+    g_board->printLastError(Serial);
     return false;
   }
 
   g_loaded = describe(g_loaded_info.get());
+  g_loaded.app = app;
+
+  Serial.print(kLogPrefix);
+  Serial.print(" loaded app=");
+  Serial.print(appName(app));
+  Serial.print(" ms=");
+  Serial.println(static_cast<unsigned long>(millis() - started));
+
   if (g_on_loaded != nullptr) {
     g_on_loaded(g_loaded);
   }
