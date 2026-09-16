@@ -132,6 +132,15 @@ struct BB15FlashInfo {
   bool supportedProfile = false;
 };
 
+/**
+ * @brief Erase unit of the BrainBoard's external flash, in bytes.
+ *
+ * The flash erases a whole sector at a time, so a sector is the least a write
+ * can commit and the natural amount for a caller to hold while it streams
+ * something larger in.
+ */
+constexpr uint32_t kBB15ExternalFlashSectorBytes = 4096u;
+
 class BB15Model {
  public:
   BB15Model(const uint8_t* data = nullptr, size_t size = 0u);
@@ -149,6 +158,27 @@ class BB15Model {
 
   uint32_t externalAddress() const;
   BB15Model& setExternalAddress(uint32_t address);
+
+  /**
+   * @brief Describe a model whose data half already sits in external flash.
+   *
+   * Only the program info stays in host memory. The engine reads the data half
+   * out of the BrainBoard's flash as it runs, so a loaded model costs the host
+   * the info blob and nothing more: a few hundred bytes for a keyword model
+   * rather than the whole serialized program.
+   *
+   * @param programInfo       The `*_program_info.bin` half, size prefix
+   *                          included. It must stay allocated for as long as
+   *                          the model is loaded, because the engine keeps a
+   *                          pointer to it.
+   * @param programInfoBytes  Its length, which must be exactly the blob.
+   * @param dataAddress       Where the `*_program_data.bin` half was written,
+   *                          as an address or an offset into the model window.
+   * @return A model a runner loads from flash.
+   */
+  static BB15Model fromExternalFlash(const uint8_t* programInfo,
+                                     size_t programInfoBytes,
+                                     uint32_t dataAddress);
 
  private:
   const uint8_t* data_ = nullptr;
@@ -237,6 +267,38 @@ class BB15 {
   bool programExternalData(const uint8_t* data, size_t size, uint32_t address);
   bool verifyExternalData(const uint8_t* data, size_t size, uint32_t address);
   bool readExternalData(uint32_t address, uint8_t* out, size_t size);
+
+  /**
+   * @brief Erase the whole sectors a range of external flash covers.
+   *
+   * Erasing is what a sector-at-a-time write costs, so it is separate from the
+   * write: a caller streaming a model in erases one sector, writes it, and
+   * moves on, rather than clearing the whole region up front and leaving it
+   * erased-but-unwritten for the length of a transfer.
+   *
+   * The board must be holding the flash bridge, which s2mEnter() takes.
+   *
+   * @param address  Start of the range, which must be sector aligned.
+   * @param size     Bytes to cover; the sector holding the last one is erased
+   *                 in full.
+   * @return True when every sector erased.
+   */
+  bool eraseExternalData(uint32_t address, size_t size);
+
+  /**
+   * @brief Write a range of external flash that has already been erased, and
+   *        read it back to check it.
+   *
+   * The board must be holding the flash bridge, which s2mEnter() takes. Unlike
+   * programExternalData this writes exactly the bytes it is given, so a caller
+   * receiving a model in pieces can commit each one as it arrives.
+   *
+   * @param address  Where the bytes go, as an address or an offset.
+   * @param data     Bytes to write.
+   * @param size     Number of bytes.
+   * @return True when everything written read back as written.
+   */
+  bool writeExternalData(uint32_t address, const uint8_t* data, size_t size);
 
   bool flashModel(const BB15Model& model);
   bool verifyModel(const BB15Model& model);
