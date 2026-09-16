@@ -12,6 +12,11 @@
 
 namespace akida_port {
 
+// Erase unit of the flash behind the AKD1500's SPI feedthrough. It is the
+// least a write can commit, so a caller streaming a model in has no reason to
+// hold more than this at a time.
+constexpr uint32_t kBridgeFlashSectorSize = 4096u;
+
 struct AKD1500Pins {
   uint8_t akida_cs = 6u;
   uint8_t bridge_cs = 10u;
@@ -81,6 +86,14 @@ class AKD1500Board {
   bool leave_s2m();
   bool s2m_active() const { return s2m_active_; }
   bool read_bridge_flash(uint32_t flash_offset, uint8_t* data, size_t size);
+  // Both of these reach the flash only through the AKD1500's SPI feedthrough,
+  // so the caller must be holding the bridge with enter_s2m(). The erase takes
+  // whole sectors, so its offset has to be a sector boundary; the write needs
+  // the range it covers to have been erased first, and reads it back to check
+  // it.
+  bool erase_bridge_flash(uint32_t flash_offset, size_t size);
+  bool write_bridge_flash(uint32_t flash_offset, const uint8_t* data,
+                          size_t size);
   bool stage_program_data_to_bridge_flash(const uint8_t* serialized_program,
                                           size_t serialized_program_size,
                                           uint32_t external_program_data_address);

@@ -11,6 +11,13 @@
 #endif
 #include "bb15/pio_expander_6408.h"
 
+#if AKD1500_PLATFORM_SUPPORTED
+static_assert(kBB15ExternalFlashSectorBytes ==
+                  akida_port::kBridgeFlashSectorSize,
+              "the sector size this header publishes must be the one the flash "
+              "driver erases with");
+#endif
+
 namespace {
 
 constexpr uint32_t kExternalModelAliasBase = 0x80000000u;
@@ -287,6 +294,15 @@ uint32_t BB15Model::externalAddress() const { return external_address_; }
 BB15Model& BB15Model::setExternalAddress(uint32_t address) {
   external_address_ = address;
   return *this;
+}
+
+BB15Model BB15Model::fromExternalFlash(const uint8_t* programInfo,
+                                       size_t programInfoBytes,
+                                       uint32_t dataAddress) {
+  BB15Model model(programInfo, programInfoBytes);
+  model.setStorage(BB15ModelStorage::ExternalFlash)
+      .setExternalAddress(dataAddress);
+  return model;
 }
 
 size_t BB15RunResult::elementCount() const {
@@ -835,6 +851,65 @@ bool BB15::readExternalData(uint32_t address, uint8_t* out, size_t size) {
       logicalFlashOffset(address), out, size);
   if (!ok) {
     setError(BB15Status::TransportStateError, "read_external_data_failed",
+             logicalFlashOffset(address));
+    return false;
+  }
+
+  last_error_ = make_error(BB15Status::Ok, "ok");
+  return true;
+#endif
+}
+
+bool BB15::eraseExternalData(uint32_t address, size_t size) {
+#if !AKD1500_PLATFORM_SUPPORTED
+  (void)address;
+  (void)size;
+  setError(BB15Status::TransportStateError, "unsupported_platform_flash_erase");
+  return false;
+#else
+  if (size == 0u || (logicalFlashOffset(address) &
+                     (kBB15ExternalFlashSectorBytes - 1u)) != 0u) {
+    setError(BB15Status::InvalidInput, "invalid_external_erase");
+    return false;
+  }
+  if (!s2m_active_ || !ensureLowLevelBoard()) {
+    setError(BB15Status::TransportStateError, "s2m_required");
+    return false;
+  }
+
+  if (!low_level_board_->erase_bridge_flash(logicalFlashOffset(address),
+                                            size)) {
+    setError(BB15Status::FlashStageFailed, "flash_erase_failed",
+             logicalFlashOffset(address));
+    return false;
+  }
+
+  last_error_ = make_error(BB15Status::Ok, "ok");
+  return true;
+#endif
+}
+
+bool BB15::writeExternalData(uint32_t address, const uint8_t* data,
+                             size_t size) {
+#if !AKD1500_PLATFORM_SUPPORTED
+  (void)address;
+  (void)data;
+  (void)size;
+  setError(BB15Status::TransportStateError, "unsupported_platform_flash_write");
+  return false;
+#else
+  if (data == nullptr || size == 0u) {
+    setError(BB15Status::InvalidInput, "invalid_external_data");
+    return false;
+  }
+  if (!s2m_active_ || !ensureLowLevelBoard()) {
+    setError(BB15Status::TransportStateError, "s2m_required");
+    return false;
+  }
+
+  if (!low_level_board_->write_bridge_flash(logicalFlashOffset(address), data,
+                                            size)) {
+    setError(BB15Status::FlashStageFailed, "flash_write_failed",
              logicalFlashOffset(address));
     return false;
   }

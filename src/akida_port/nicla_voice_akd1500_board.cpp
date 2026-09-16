@@ -112,7 +112,6 @@ constexpr uint8_t kFlashCmdWriteStatus2 = 0x31u;
 constexpr uint8_t kFlashCmdPageProgram = 0x02u;
 constexpr uint8_t kFlashCmdSectorErase4K = 0x20u;
 constexpr uint8_t kFlashStatus2QuadEnable = 0x02u;
-constexpr uint32_t kFlashSectorSize = 4096u;
 constexpr size_t kFlashPageSize = 256u;
 constexpr size_t kFlashVerifyChunkSize = 64u;
 constexpr bool kEnableSpiTrace = false;
@@ -1383,6 +1382,75 @@ bool AKD1500Board::read_bridge_flash(uint32_t flash_offset, uint8_t* data,
   return read_flash_bytes(flash_offset, data, size);
 }
 
+bool AKD1500Board::erase_bridge_flash(uint32_t flash_offset, size_t size) {
+  if (!s2m_active_ || size == 0u ||
+      (flash_offset & (kBridgeFlashSectorSize - 1u)) != 0u) {
+    AKD1500_LIBRARY_LOG(
+        "[AKD1500][flash] erase refused s2m=%d offset=0x%08lX size=%lu\r\n",
+        s2m_active_ ? 1 : 0, static_cast<unsigned long>(flash_offset),
+        static_cast<unsigned long>(size));
+    return false;
+  }
+  if (!flash_bridge_reset_preamble(spi_driver_, config_.pins.bridge_cs)) {
+    return false;
+  }
+
+  const uint32_t end = flash_offset + static_cast<uint32_t>(size);
+  for (uint32_t address = flash_offset; address < end;
+       address += kBridgeFlashSectorSize) {
+    if (!flash_bridge_sector_erase(spi_driver_, config_.pins.bridge_cs,
+                                   address)) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] sector erase failed addr=0x%08lX\r\n",
+          static_cast<unsigned long>(address));
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AKD1500Board::write_bridge_flash(uint32_t flash_offset,
+                                      const uint8_t* data, size_t size) {
+  if (!s2m_active_ || data == nullptr || size == 0u) {
+    AKD1500_LIBRARY_LOG("[AKD1500][flash] write refused s2m=%d size=%lu\r\n",
+                        s2m_active_ ? 1 : 0,
+                        static_cast<unsigned long>(size));
+    return false;
+  }
+  if (!flash_bridge_reset_preamble(spi_driver_, config_.pins.bridge_cs)) {
+    return false;
+  }
+
+  for (size_t offset = 0u; offset < size; offset += kFlashPageSize) {
+    const size_t page_bytes = std::min(kFlashPageSize, size - offset);
+    if (!flash_bridge_page_program(spi_driver_, config_.pins.bridge_cs,
+                                   static_cast<uint32_t>(flash_offset + offset),
+                                   data + offset, page_bytes)) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] page program failed addr=0x%08lX size=%lu\r\n",
+          static_cast<unsigned long>(flash_offset + offset),
+          static_cast<unsigned long>(page_bytes));
+      return false;
+    }
+  }
+
+  std::array<uint8_t, kFlashVerifyChunkSize> readback{};
+  for (size_t offset = 0u; offset < size; offset += kFlashVerifyChunkSize) {
+    const size_t chunk_bytes = std::min(kFlashVerifyChunkSize, size - offset);
+    if (!flash_bridge_read_data(spi_driver_, config_.pins.bridge_cs,
+                                static_cast<uint32_t>(flash_offset + offset),
+                                readback.data(), chunk_bytes) ||
+        std::memcmp(data + offset, readback.data(), chunk_bytes) != 0) {
+      AKD1500_LIBRARY_LOG(
+          "[AKD1500][flash] readback mismatch addr=0x%08lX size=%lu\r\n",
+          static_cast<unsigned long>(flash_offset + offset),
+          static_cast<unsigned long>(chunk_bytes));
+      return false;
+    }
+  }
+  return true;
+}
+
 bool AKD1500Board::stage_program_data_to_bridge_flash(
     const uint8_t* serialized_program, size_t serialized_program_size,
     uint32_t external_program_data_address) {
@@ -1464,15 +1532,15 @@ bool AKD1500Board::stage_program_data_to_bridge_flash(
   }
 
   const uint32_t erase_start =
-      static_cast<uint32_t>(flash_offset) & ~(kFlashSectorSize - 1u);
+      static_cast<uint32_t>(flash_offset) & ~(kBridgeFlashSectorSize - 1u);
   const uint32_t erase_end =
       (static_cast<uint32_t>(flash_offset) +
        static_cast<uint32_t>(program_data_size) +
-       (kFlashSectorSize - 1u)) &
-      ~(kFlashSectorSize - 1u);
+       (kBridgeFlashSectorSize - 1u)) &
+      ~(kBridgeFlashSectorSize - 1u);
 
   for (uint32_t addr = erase_start; ok && addr < erase_end;
-       addr += kFlashSectorSize) {
+       addr += kBridgeFlashSectorSize) {
     ok = flash_bridge_sector_erase(spi_driver_, config_.pins.bridge_cs, addr);
     if (!ok) {
       AKD1500_LIBRARY_LOG(
