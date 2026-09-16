@@ -60,6 +60,12 @@ characteristics the earlier protocol used are gone. There is one path and no
 fallback, and an interrupted transfer is started again from zero rather than
 resumed.
 
+The `flash_address` in the package's `info.yaml` has to be a sector boundary
+inside the 512 kB slot this example owns, and clear of the sector the record
+sits in, so anything from 0x1000 up. An address outside that is refused at
+START with `ERR_PARAM`; AkidaTag's own packages say 0x101000, which this board
+will not take.
+
 The board answers `DONE` when the whole file is stored and checked, and
 `READY` only once it has programmed the BrainBoard with the model and scored
 one inference with it. Those mean different things and the app shows them
@@ -92,8 +98,14 @@ The serial log says which happened.
 Only the program info stays in memory. The engine reads the model data out of
 BrainBoard flash as it runs, so the host holds 504 bytes for this keyword
 model rather than the whole 22,112 byte program. Measured on the bench, the
-heap with a model loaded is 19,278 bytes where holding the whole program cost
-40,980.
+heap with the keyword model loaded is 19,278 bytes, where holding the whole
+program cost 40,980.
+
+What that costs barely depends on the model. The same sketch was given the
+183,884 byte human detection program, more than eight times the size, and the
+heap went to 19,438 bytes: 160 bytes more, which is the difference between a
+640 byte program info and a 504 byte one. A model's data half costs the host
+nothing.
 
 The same is true while a transfer is running: the board holds one 4,096 byte
 block, not the model.
