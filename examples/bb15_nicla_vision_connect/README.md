@@ -21,12 +21,10 @@ camera USB-side down.
 What differs from the USB examples is the transport and where the models come
 from.
 
-**The live camera preview is not a working feature.** The board half is built
-and its wire format is defined below, but the board does not send it yet and
-**the app has no preview support at all**, so pressing start streaming on human
-detection shows nothing. Both halves are outstanding: the format has still to
-be measured against what reads as live over this link, and the app has to learn
-to draw it. Only detections go out today.
+The board sends a live camera preview while the human detection stream is open.
+**The app half does not exist yet**, so pressing start streaming shows nothing
+until the app learns to draw the frames; the format below is what it should be
+built against.
 
 The BrainChip Connect app is currently private and will be released soon.
 
@@ -58,8 +56,16 @@ applications use the same `0x1000`.
 
 Only one program fits in the Akida fabric, so nothing is loaded until the app
 asks for an application to run. Starting one is therefore a model swap, which
-takes about 1.9 seconds for either model and is inside the 3 second window the
-app allows.
+measures **1,231 ms for the keyword model and 1,350 ms for the vision one**.
+
+Almost all of that is the engine programming the fabric, 1,228 ms and 1,319 ms
+of it, which is a fixed cost rather than one that scales: the vision model is
+eight times the size and costs 91 ms more. The switch holds no flash: each
+slot's program info is read once, when the board first sees the slot, and kept
+in memory, which is 504 bytes for the keyword model and 640 for the vision one.
+Reading it from flash on every switch used to add 575 ms. What remains beyond
+the fabric is one inference on a blank input, 3 ms and 31 ms, which is how the
+board satisfies itself the model really runs before it says so.
 
 **The model must be built for the Akida engine this library carries, which is
 2.5.0.** A model built for another engine version is refused: the serialized
@@ -191,10 +197,9 @@ no cell therefore reads as a charged one.
 
 ## The camera preview frame
 
-Defined here so the app can be built against it, though the board does not send
-it yet. Preview frames ride the same notify characteristic as the microphone
-waveform, `6e400003-b5a3-f393-e0a9-e50e24dcca9e`, and are told apart from the
-text frames by the first byte and from the waveform by the second.
+Preview frames ride the same notify characteristic as the microphone waveform,
+`6e400003-b5a3-f393-e0a9-e50e24dcca9e`, and are told apart from the text frames
+by the first byte and from the waveform by the second.
 
 | offset | size | field |
 | --- | --- | --- |
@@ -210,9 +215,26 @@ text frames by the first byte and from the waveform by the second.
 
 Every chunk carries the geometry, so a reader needs no state beyond the image
 it is assembling: start a new image of `width * height` bytes when the sequence
-changes, write each chunk at its own offset, and render when it is full. An
-image whose sequence is superseded before it fills should be dropped rather
-than held, because the board always sends the newest frame and never queues.
+changes, write each chunk at its own offset, and render when it is full.
+
+**Every image the board sends is whole.** The camera produces frames far faster
+than the link carries them, so a frame offered while one is still going out is
+dropped rather than queued or spliced in. What the phone receives is therefore
+a sequence of complete images, each the newest one available when its turn
+came, and the backlog never grows however slow the link is.
+
+The board sends at most four notifications per pass of its loop, so a link slow
+to accept them delays the preview and nothing else: inference keeps running at
+its own rate and detections keep going out on their own frames ahead of any
+image. The serial log reports what the preview is actually achieving every five
+seconds, as `[preview] fps= bytes_per_s= dropped=`.
+
+At 96x96 an image is 9,216 pixels in 41 notifications, 9,626 bytes on the wire
+once the headers are counted. The link was measured at 22.9 kB/s in earlier
+work on this board, which puts the preview at roughly 2.4 frames a second. If
+that is too slow to read as live, the cheapest change is to send a smaller
+image: the format carries its own geometry, so halving to 48x48 needs no app
+change and is about four times the rate.
 
 ## What the app cannot do against this board
 

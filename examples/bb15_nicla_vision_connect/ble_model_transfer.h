@@ -25,6 +25,7 @@ struct Installed {
   uint8_t classCount = 0u;
   uint8_t silenceClass = 0u;
   uint8_t unknownClass = 0u;
+  float mfccFullScale = 0.0f;
   char name[kMaxNameLength] = {0};
 };
 

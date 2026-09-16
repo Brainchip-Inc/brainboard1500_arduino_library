@@ -193,7 +193,19 @@ ActivityHandler g_on_activity = nullptr;
 Session g_session;
 Transfer g_transfer;
 Record g_record = {};
-Installed g_installed[kAppCount];
+
+/** @brief What one slot holds, kept so a switch never has to read flash. */
+struct Slot {
+  Installed installed;
+  // The program info, read once when the slot is first seen. Holding it costs
+  // a few hundred bytes and saves taking the flash bridge over on every
+  // switch, which is most of what a switch used to cost.
+  std::unique_ptr<uint8_t[]> programInfo;
+  uint32_t programInfoBytes = 0u;
+  uint32_t dataAddress = 0u;
+};
+
+Slot g_slots[kAppCount];
 
 // One block of the model in flight, held only until it reaches flash.
 std::unique_ptr<uint8_t[]> g_block;
@@ -539,10 +551,27 @@ Installed summarize(const Record& record) {
   summary.classCount = static_cast<uint8_t>(shapeVolume(record.outputShape));
   summary.silenceClass = static_cast<uint8_t>(record.silenceClass);
   summary.unknownClass = static_cast<uint8_t>(record.unknownClass);
+  memcpy(&summary.mfccFullScale, &record.mfccFsBits, sizeof(float));
   memcpy(summary.name, record.name, kMaxNameLength);
   summary.name[kMaxNameLength - 1u] = '\0';
   summary.present = true;
   return summary;
+}
+
+/**
+ * @brief Remember what a slot holds, so a later switch needs no flash.
+ *
+ * @param app        Slot being described.
+ * @param info       Its program info, which is copied.
+ * @param record     The record that opens it.
+ */
+void rememberSlot(App app, const uint8_t* info, const Record& record) {
+  Slot& slot = g_slots[static_cast<size_t>(app)];
+  slot.installed = summarize(record);
+  slot.programInfo.reset(new uint8_t[record.infoLength]);
+  memcpy(slot.programInfo.get(), info, record.infoLength);
+  slot.programInfoBytes = record.infoLength;
+  slot.dataAddress = record.dataAddress;
 }
 
 /** @brief The CRC covering everything in the record past its own CRC field. */
@@ -1175,7 +1204,7 @@ void installStoredModel() {
 
   g_loaded = describe(g_loaded_info.get());
   g_loaded.app = g_session.app;
-  g_installed[static_cast<size_t>(g_session.app)] = summarize(g_record);
+  rememberSlot(g_session.app, g_loaded_info.get(), g_record);
   queueStatus(kResultReady, g_transfer.total);
   endSession();
   if (g_on_loaded != nullptr) {
@@ -1340,55 +1369,61 @@ size_t readInstalled() {
   for (size_t index = 0u; index < kAppCount; ++index) {
     const App app = static_cast<App>(index);
     std::unique_ptr<uint8_t[]> programInfo;
-    g_installed[index] = Installed();
+    g_slots[index] = Slot();
     if (!readInstalledModel(app, &programInfo)) {
       continue;
     }
-    g_installed[index] = summarize(g_record);
+    g_slots[index].installed = summarize(g_record);
+    g_slots[index].programInfo = std::move(programInfo);
+    g_slots[index].programInfoBytes = g_record.infoLength;
+    g_slots[index].dataAddress = g_record.dataAddress;
     ++found;
 
     Serial.print(kLogPrefix);
     Serial.print(" slot app=");
     Serial.print(appName(app));
     Serial.print(" model=");
-    Serial.print(g_installed[index].name);
+    Serial.print(g_slots[index].installed.name);
     Serial.print(" classes=");
-    Serial.print(g_installed[index].classCount);
+    Serial.print(g_slots[index].installed.classCount);
     Serial.print(" program_bytes=");
-    Serial.println(static_cast<unsigned long>(g_installed[index].programBytes));
+    Serial.println(
+        static_cast<unsigned long>(g_slots[index].installed.programBytes));
   }
   return found;
 }
 
 const Installed& installed(App app) {
-  return g_installed[static_cast<size_t>(app)];
+  return g_slots[static_cast<size_t>(app)].installed;
 }
 
 bool load(App app) {
   if (g_loaded.valid && g_loaded.app == app) {
     return true;
   }
-  if (!g_installed[static_cast<size_t>(app)].present) {
+  const Slot& slot = g_slots[static_cast<size_t>(app)];
+  if (!slot.installed.present || slot.programInfo == nullptr) {
     return false;
   }
 
   const uint32_t started = millis();
-  std::unique_ptr<uint8_t[]> programInfo;
-  if (!readInstalledModel(app, &programInfo)) {
-    return false;
-  }
-  if (!programInfoAcceptable(programInfo.get(), g_record.infoLength)) {
+
+  // The engine keeps a pointer into whatever it was programmed from, so it is
+  // given a copy of its own rather than the cached blob, which a later
+  // transfer into this slot is free to replace.
+  std::unique_ptr<uint8_t[]> programInfo(new uint8_t[slot.programInfoBytes]);
+  memcpy(programInfo.get(), slot.programInfo.get(), slot.programInfoBytes);
+  if (!programInfoAcceptable(programInfo.get(), slot.programInfoBytes)) {
     Serial.print(kLogPrefix);
     Serial.println(" model refused: not a program this engine can load");
     return false;
   }
 
-  // The outgoing model goes first: the engine holds a pointer into the info
-  // blob it was last programmed from, so that has to outlive the swap.
   g_loaded = Loaded();
+  const BB15Model model = BB15Model::fromExternalFlash(
+      programInfo.get(), slot.programInfoBytes, slot.dataAddress);
   const bool ready =
-      loadModelFromFlash(programInfo.get(), g_record.infoLength) &&
-      modelInfers();
+      g_runner->loadModel(model) == BB15Status::Ok && modelInfers();
   g_loaded_info = std::move(programInfo);
   if (!ready) {
     Serial.print(kLogPrefix);
@@ -1399,8 +1434,17 @@ bool load(App app) {
     return false;
   }
 
-  g_loaded = describe(g_loaded_info.get());
+  g_loaded.programInfo = g_loaded_info.get();
+  g_loaded.programInfoBytes = slot.programInfoBytes;
+  g_loaded.dataAddress = slot.dataAddress;
+  g_loaded.programBytes = slot.installed.programBytes;
+  g_loaded.classCount = slot.installed.classCount;
+  g_loaded.silenceClass = slot.installed.silenceClass;
+  g_loaded.unknownClass = slot.installed.unknownClass;
+  g_loaded.mfccFullScale = slot.installed.mfccFullScale;
+  memcpy(g_loaded.name, slot.installed.name, kMaxNameLength);
   g_loaded.app = app;
+  g_loaded.valid = true;
 
   Serial.print(kLogPrefix);
   Serial.print(" loaded app=");
