@@ -261,7 +261,7 @@ void on_person(const vision::Detection& detection) {
  * @param pixels  The model's own input, in grayscale.
  */
 void on_preview(const uint8_t* pixels) {
-  protocol::sendPreview(pixels, vision::kFrameWidth, vision::kFrameHeight);
+  protocol::offerPreview(pixels, vision::kFrameWidth, vision::kFrameHeight);
 }
 
 /** @brief Follow the connection on the LED and stop work on a disconnect. */
@@ -374,6 +374,7 @@ void loop() {
   BLE.poll();
   track_connection();
   protocol::poll();
+  protocol::pollPreview();
   model::poll();
   device::updateLed();
 

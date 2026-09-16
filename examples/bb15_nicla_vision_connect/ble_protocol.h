@@ -73,13 +73,28 @@ void sendDetection(const char* label, float confidence);
 void sendWaveform(const int16_t* values, uint16_t count);
 
 /**
- * @brief Send one camera preview image, as however many frames it takes.
+ * @brief Offer one camera image for preview.
+ *
+ * An image takes many notifications to send, and the camera produces them
+ * faster than the link carries them, so an offer made while one is still
+ * going out is dropped. The phone therefore always gets whole images, each
+ * the newest one available when its turn came, and the backlog never grows.
+ *
+ * The pixels are copied, so the caller may reuse its buffer at once.
  *
  * @param pixels  8-bit grayscale pixels, top row first.
  * @param width   Image width in pixels, at most 255.
  * @param height  Image height in pixels, at most 255.
  */
-void sendPreview(const uint8_t* pixels, uint8_t width, uint8_t height);
+void offerPreview(const uint8_t* pixels, uint8_t width, uint8_t height);
+
+/**
+ * @brief Send a bounded slice of the image being previewed.
+ *
+ * Call it from the sketch's loop. It sends a few notifications and returns, so
+ * that a link slow to take them delays the preview and nothing else.
+ */
+void pollPreview();
 
 /** @brief Say whether a phone is connected and subscribed. */
 bool connected();
