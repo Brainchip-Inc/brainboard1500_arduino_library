@@ -13,10 +13,10 @@ blocker, 960-sample blocks, RMS speech gate, MFCC front end, spectrogram ring,
 inference period, smoothing, debounce and chiming.
 
 **Vision Human Detection** scores a 96x96 crop of the camera against the visual
-wake words model at about 15 frames a second, and reports `person` or
-`no_person` five times a second. The crop is the widest centred square of a 320x240 capture,
-sampled down and rotated half a turn, because the model was trained with the
-camera USB-side down.
+wake words model at about 15 frames a second and reports a person when it sees
+one. The crop is the widest centred square of a 320x240 capture, sampled down
+and rotated half a turn, because the model was trained with the camera USB-side
+down.
 
 What differs from the USB examples is the transport and where the models come
 from.
@@ -180,7 +180,7 @@ The RGB LED is driven directly and is active low.
 | Blue, one short flash every two seconds | advertising, no phone connected |
 | Green, steady | a phone is connected |
 | Blue, fast blink | a model transfer is running |
-| Red, one short flash | a keyword was detected, or a person was seen |
+| Red, one short flash | a keyword was detected, or a person is in view |
 | Red, slow blink | setup failed; the serial log says at which stage |
 
 ## Battery
@@ -193,6 +193,27 @@ Whether a cell is fitted at all cannot be read on this board while it runs from
 USB: the gauge sits on the system rail, so with no cell it reports that rail as
 a full, healthy battery and its battery-present bit agrees. A board on USB with
 no cell therefore reads as a charged one.
+
+## What the board reports
+
+Both demos report events, not state. Keyword spotting sends a keyword when one
+is spoken and says nothing while nobody is speaking. Human detection sends a
+person when one arrives in front of the camera and says nothing while the view
+is clear.
+
+A person is reported once the person score has held at or above 0.50 for three
+frames in a row, which is the score-and-hold the keyword detector uses, with
+the same threshold and the same count. Someone who stays in view is not
+reported again: where a keyword arms the detector again by ending, a person
+does not end, so the detector arms again only once the score has fallen back
+for three frames. Arriving, leaving and arriving again is two detections, and
+standing still is one.
+
+**Nothing is sent when the person leaves, by design.** No end-of-detection
+message exists, exactly as none exists when a spoken word stops, so the phone
+shows the last person seen until it sees the next one. The LED is the live
+indicator instead: it follows every scored frame, so it is lit while a person
+is in front of the camera and dark when the view is clear.
 
 ## The camera preview frame
 
@@ -228,14 +249,12 @@ its own rate and detections keep going out on their own frames ahead of any
 image. The serial log reports what the preview is actually achieving every five
 seconds, as `[preview] fps= bytes_per_s= dropped=`.
 
-Detections are paced for the same reason. Sending a notification blocks the
-sketch until the Bluetooth controller has a buffer free, because
-`HCIClass::sendAclPkt` busy-waits on its packet credits in ArduinoBLE at
-`src/utility/HCI.cpp:638`, so a reading on every scored frame would pace the
-whole loop off the radio. The board sends one reading every 200 ms instead,
-which is still faster than the preview behind it. That wait has no timeout, so
-a central that stops draining notifications altogether can still block a send
-for as long as it stays stopped.
+Sending a notification blocks the sketch until the Bluetooth controller has a
+buffer free, because `HCIClass::sendAclPkt` busy-waits on its packet credits in
+ArduinoBLE at `src/utility/HCI.cpp:638`, and that wait has no timeout. It is
+why the preview drops rather than queues, and it is one reason detections are
+events rather than a reading per frame. A central that stops draining
+notifications altogether can still hold a send for as long as it stays stopped.
 
 At 96x96 an image is 9,216 pixels in 41 notifications, 9,626 bytes on the wire
 once the headers are counted. The link was measured at 22.9 kB/s in earlier

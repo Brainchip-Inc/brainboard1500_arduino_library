@@ -25,14 +25,21 @@ struct ModelParameters {
   uint8_t classCount = 0u;
 };
 
-/** @brief One scored frame, reported whether or not a person was seen. */
+/**
+ * @brief One scored frame.
+ *
+ * `person` is what this frame on its own looked like, which is what the LED
+ * follows. `triggered` is the detector's decision that a person is there and
+ * this is the frame to tell the phone about.
+ */
 struct Detection {
   uint8_t classIndex = kNoPrediction;
   float confidence = 0.0f;
   bool person = false;
+  bool triggered = false;
 };
 
-/** @brief Called once per scored frame. */
+/** @brief Called once per scored frame, detection or not. */
 using DetectionHandler = void (*)(const Detection& detection);
 
 /**

@@ -19,7 +19,6 @@ constexpr uint32_t kSerialBaud = 115200u;
 constexpr uint32_t kSerialWaitMs = 3000u;
 constexpr uint32_t kBootSettleMs = 250u;
 constexpr uint32_t kAkidaSpiClockHz = 25000000u;
-constexpr uint32_t kPersonReportIntervalMs = 200u;
 
 constexpr const char* kSketchName = "bb15_nicla_vision_connect";
 constexpr const char* kLogPrefix = "[bb15_nicla_vision_connect]";
@@ -34,7 +33,6 @@ BB15Config g_config = []() {
 BB15* g_board = nullptr;
 BB15Runner* g_runner = nullptr;
 bool g_was_connected = false;
-uint32_t g_person_reported_ms = 0u;
 
 // A spare RTC backup register, which survives a reset but not a power cycle.
 // It carries a cookie saying whether the previous run ended by asking to
@@ -241,12 +239,11 @@ void on_detection(const kws::Detection& detection) {
 }
 
 /**
- * @brief Report what the vision model saw, at a pace the link can carry.
+ * @brief Tell the phone a person has been seen, and the LED every frame.
  *
- * A notification blocks the sketch until the Bluetooth controller has a buffer
- * free, so reporting every scored frame paces the whole loop off the radio.
- * Readings go out no more often than kPersonReportIntervalMs. The LED is not
- * paced, because it costs nothing and is what makes a person register at once.
+ * The phone is sent a detection and nothing else, the way it is sent a keyword
+ * rather than every block of audio. The LED follows each frame instead, which
+ * costs nothing and is what makes a person register at once.
  *
  * @param detection  Class and score the pipeline decided on.
  */
@@ -254,13 +251,9 @@ void on_person(const vision::Detection& detection) {
   if (detection.person) {
     device::flashDetection();
   }
-
-  const uint32_t now = millis();
-  if (now - g_person_reported_ms < kPersonReportIntervalMs) {
+  if (!detection.triggered) {
     return;
   }
-  g_person_reported_ms = now;
-
   protocol::sendDetection(vision::classLabel(detection.classIndex),
                           detection.confidence);
 }

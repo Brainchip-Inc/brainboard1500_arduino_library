@@ -41,6 +41,12 @@ constexpr uint8_t kClassLabelCount =
     sizeof(kClassLabels) / sizeof(kClassLabels[0]);
 constexpr uint8_t kMaxClasses = 8u;
 
+// The person score has to reach this and hold it for this many frames in a row
+// before a detection is reported. Both come from the keyword detector, which
+// decides the same way.
+constexpr float kScoreThreshold = 0.50f;
+constexpr uint8_t kChimingThreshold = 3u;
+
 ModelParameters g_model;
 BB15Runner* g_runner = nullptr;
 const int32_t* g_output_shifts = nullptr;
@@ -48,6 +54,10 @@ const float* g_output_scales = nullptr;
 
 DetectionHandler g_on_detection = nullptr;
 PreviewHandler g_on_preview = nullptr;
+
+uint8_t g_chiming = 0u;
+uint8_t g_lapsed = 0u;
+bool g_armed = true;
 
 // Held only while scoring, because the model transfer needs the same memory.
 std::unique_ptr<uint8_t[]> g_capture;
@@ -263,6 +273,50 @@ bool start_frame() {
   return true;
 }
 
+/** @brief Clear the decision counters and let the detector fire again. */
+void reset_decision_state() {
+  g_chiming = 0u;
+  g_lapsed = 0u;
+  g_armed = true;
+}
+
+/**
+ * @brief Say whether this frame is the one to report a person on.
+ *
+ * The score has to hold above the threshold for kChimingThreshold frames,
+ * which is how the keyword detector decides. What arms that one again is the
+ * word ending; a person does not end, they stay in view, so this one arms
+ * again only once the score has fallen back for as many frames as it took to
+ * fire. A person is therefore reported when they arrive and not again until
+ * they have gone.
+ *
+ * @param personScore  This frame's score for the person class, or zero when
+ *                     the frame went the other way.
+ * @return True when this frame should be reported to the phone.
+ */
+bool apply_decision(float personScore) {
+  if (personScore >= kScoreThreshold) {
+    g_lapsed = 0u;
+    if (g_chiming < kChimingThreshold) {
+      ++g_chiming;
+    }
+    if (g_armed && g_chiming >= kChimingThreshold) {
+      g_armed = false;
+      return true;
+    }
+    return false;
+  }
+
+  g_chiming = 0u;
+  if (g_lapsed < kChimingThreshold) {
+    ++g_lapsed;
+  }
+  if (g_lapsed >= kChimingThreshold) {
+    g_armed = true;
+  }
+  return false;
+}
+
 /**
  * @brief Collect the result of the frame in flight and report it.
  *
@@ -296,6 +350,8 @@ bool finish_frame() {
     }
   }
   detection.person = detection.classIndex == kPersonClass;
+  detection.triggered =
+      apply_decision(detection.person ? detection.confidence : 0.0f);
 
   // The result goes first and on its own, so the phone's indicator keeps up
   // with the board even while a preview frame is still going out.
@@ -356,6 +412,7 @@ void setInferenceRunning(bool running) {
   }
   g_running =
       running && modelReady() && g_camera_ready && hold_capture_buffer(true);
+  reset_decision_state();
   if (!g_running) {
     drain_inflight();
     hold_capture_buffer(false);
@@ -374,6 +431,7 @@ void setHandlers(DetectionHandler onDetection, PreviewHandler onPreview) {
 void standDown() {
   g_running = false;
   g_streaming = false;
+  reset_decision_state();
   drain_inflight();
   hold_capture_buffer(false);
 }
