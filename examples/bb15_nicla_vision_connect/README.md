@@ -13,8 +13,8 @@ blocker, 960-sample blocks, RMS speech gate, MFCC front end, spectrogram ring,
 inference period, smoothing, debounce and chiming.
 
 **Vision Human Detection** scores a 96x96 crop of the camera against the visual
-wake words model and reports `person` or `no_person` for every frame, at about
-15 frames a second. The crop is the widest centred square of a 320x240 capture,
+wake words model at about 15 frames a second, and reports `person` or
+`no_person` five times a second. The crop is the widest centred square of a 320x240 capture,
 sampled down and rotated half a turn, because the model was trained with the
 camera USB-side down.
 
@@ -227,6 +227,15 @@ to accept them delays the preview and nothing else: inference keeps running at
 its own rate and detections keep going out on their own frames ahead of any
 image. The serial log reports what the preview is actually achieving every five
 seconds, as `[preview] fps= bytes_per_s= dropped=`.
+
+Detections are paced for the same reason. Sending a notification blocks the
+sketch until the Bluetooth controller has a buffer free, because
+`HCIClass::sendAclPkt` busy-waits on its packet credits in ArduinoBLE at
+`src/utility/HCI.cpp:638`, so a reading on every scored frame would pace the
+whole loop off the radio. The board sends one reading every 200 ms instead,
+which is still faster than the preview behind it. That wait has no timeout, so
+a central that stops draining notifications altogether can still block a send
+for as long as it stays stopped.
 
 At 96x96 an image is 9,216 pixels in 41 notifications, 9,626 bytes on the wire
 once the headers are counted. The link was measured at 22.9 kB/s in earlier
