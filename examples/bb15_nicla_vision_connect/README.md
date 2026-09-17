@@ -21,10 +21,9 @@ camera USB-side down.
 What differs from the USB examples is the transport and where the models come
 from.
 
-The board sends a live camera preview while the human detection stream is open.
-**The app half does not exist yet**, so pressing start streaming shows nothing
-until the app learns to draw the frames; the format below is what it should be
-built against.
+The board sends a live camera preview while the human detection stream is open,
+and the app draws it. The format described below is the one the app implements,
+so a board change that alters it breaks the phone.
 
 The BrainChip Connect app is currently private and will be released soon.
 
